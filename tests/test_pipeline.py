@@ -172,8 +172,57 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(row['tool_calls'][0]['arguments']['query'], 'Sếp Dũng')
         self.assertEqual(row['tool_calls'][1]['arguments']['query'], 'Sếp Dũng')
         self.assertEqual(row['tool_calls'][2]['arguments']['query'], 'Sếp Dũng')
-        self.assertEqual(row['tool_calls'][3]['arguments']['query'], 'Cô giáo Mai')
+        self.assertEqual(row['tool_calls'][3]['arguments']['query'], 'Cô Mai')
         self.assertEqual(row['tool_calls'][4]['arguments']['query'], 'Bác Ba')
+
+    def test_smarthome_get_status_strips_restrictive_filters(self):
+        env = FakeEnv()
+        tools = [{'name': 'smart_home.get_status', 'kind': 'read'}]
+        decisions = iter([[{'name': 'smart_home.get_status', 'arguments': {'room': 'phòng ngủ', 'type': 'light'}}], []])
+        messages = [{'role': 'user', 'content': 'Giảm độ sáng đèn phòng ngủ nhỏ xuống còn 50'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(row['tool_calls'][0]['arguments'], {})
+
+    def test_topup_amount_normalized_from_spoken_text(self):
+        env = FakeEnv()
+        tools = [{'name': 'ewallet.topup_mobile', 'kind': 'write'}]
+        decisions = iter([[{'name': 'ewallet.topup_mobile', 'arguments': {'phone': '0912345678', 'amount': 100000}}], []])
+        messages = [{'role': 'user', 'content': 'Nạp giúp mình năm mươi ngàn tiền điện thoại 0912345678'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(row['tool_calls'][0]['arguments']['amount'], 50000)
+
+    def test_bill_transfer_amount_aligned_with_discovered_bills(self):
+        class BillEnv(FakeEnv):
+            def call(self, name, args):
+                super().call(name, args)
+                if name == 'bill_payment.list_bills':
+                    return {'ok': True, 'bills': [{'type': 'electricity', 'amount': 845000}]}
+                return {'ok': True}
+
+        env = BillEnv()
+        tools = [{'name': 'bill_payment.list_bills', 'kind': 'read'}, {'name': 'ewallet.transfer', 'kind': 'write'}]
+        decisions = iter([
+            [{'name': 'bill_payment.list_bills', 'arguments': {}}],
+            [{'name': 'ewallet.transfer', 'arguments': {'phone': '0912345678', 'amount': 100000, 'note': 'Tiền điện'}}],
+            []
+        ])
+        messages = [{'role': 'user', 'content': 'Chuyển tiền điện tháng này tới số 0912345678'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        transfer_call = [c for c in row['tool_calls'] if c['name'] == 'ewallet.transfer'][0]
+        self.assertEqual(transfer_call['arguments']['amount'], 845000)
+        self.assertNotIn('note', transfer_call['arguments'])
+
+    def test_bill_transfer_without_bill_lookup_is_intercepted(self):
+        env = FakeEnv()
+        tools = [{'name': 'bill_payment.list_bills', 'kind': 'read'}, {'name': 'ewallet.transfer', 'kind': 'write'}]
+        decisions = iter([
+            [{'name': 'ewallet.transfer', 'arguments': {'phone': '0912345678', 'amount': 50000}}],
+            []
+        ])
+        messages = [{'role': 'user', 'content': 'Chuyển tiền điện tháng này tới số 0912345678'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(row['tool_calls'], [])
+        self.assertIn('validation_error', log['trace'][0]['result'])
 
     def test_calendar_update_event_computes_end_time_from_duration(self):
         class CalendarEnv(FakeEnv):

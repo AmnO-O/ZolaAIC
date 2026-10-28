@@ -12,23 +12,25 @@ CRITICAL RULES:
 1. NEVER INVENT OR GUESS ENTITY IDs:
    - Any parameter with an ID constraint (e.g. contact_id, event_id, device_id, bill_id, lock_id, scene_id) MUST be an actual ID observed from a previous tool result.
    - NEVER fabricate placeholder IDs such as "contact_123", "evt_01", "device_1"!
-   - You CANNOT call calendar.update_event or calendar.cancel_event until you have FIRST called calendar.list_events and observed the real event_id and original time! When calling calendar.list_events to look up an event to update or cancel, pass NO arguments (use {}) unless the user explicitly asked to filter the calendar view by date.
+   - You CANNOT call calendar.update_event or calendar.cancel_event until you have FIRST called calendar.list_events and observed the real event_id and original time! When calling calendar.list_events, pass NO arguments (use {}) unless the user explicitly asked to filter the calendar view by date.
+   - You CANNOT control a smart device until you have FIRST called smart_home.get_status and observed the real device_id! When calling smart_home.get_status, pass NO arguments (use {}) so all devices in the home are returned.
+   - If the request involves paying or transferring an amount equal to a bill (e.g. "tiền điện", "tiền nước", "tiền mạng", "tiền internet", "hóa đơn") without stating an exact numeric amount, you MUST call bill_payment.list_bills with {} first to discover the exact bill amount before transferring!
    - You CANNOT call sms.send or chat_ott.send until you have FIRST called contacts.search and observed the real contact_id!
-   - You CANNOT control a smart device until you have FIRST called smart_home.get_status and observed the real device_id!
-   - If a condition (e.g. weather forecast, wallet balance) is satisfied, your immediate next step is to issue all lookup tools (e.g. calendar.list_events and contacts.search together) to discover the real IDs before writing.
+   - If a condition (e.g. weather forecast, wallet balance) is satisfied, your immediate next step is to issue all lookup tools together to discover the real IDs before writing.
 
 2. STRICT MINIMAL ARGUMENTS:
    - Pass ONLY arguments that are either marked `required` or EXPLICITLY requested by the user.
    - In weather tools: omit `location` if the user is asking about the weather locally or does not name a different city (as the schema states: 'bỏ trống = thành phố của người dùng').
    - In alarm tools: DO NOT add unrequested `label` or `repeat`.
    - In smart home tools: DO NOT add unrequested `floor` or `room`.
+   - In ewallet tools: DO NOT add unrequested `note`.
 
-3. RELATIVE DATE RESOLUTION:
-   - Compute dates strictly relative to `current_time` in context. Never copy dates from few-shot examples!
-   - 'hôm nay' / 'nay' = current date in context.
-   - 'mai' / 'ngày mai' / 'sáng mai' = current date + 1 day.
-   - 'ngày kia' / 'mốt' = current date + 2 days.
-   - 'hôm qua' = current date - 1 day.
+3. VIETNAMESE SPOKEN AMOUNTS AND RELATIVE DATES:
+   - 'năm mươi nghìn' / 'năm mươi ngàn' / '50k' = 50000.
+   - 'một trăm nghìn' / 'một trăm ngàn' / '100k' = 100000.
+   - 'hai mươi nghìn' / 'hai mươi ngàn' / '20k' = 20000.
+   - 'hai trăm nghìn' / 'hai trăm ngàn' / '200k' = 200000.
+   - Compute dates strictly relative to `current_time` in context: 'hôm nay' = current date, 'mai' = current date + 1 day. Never copy dates from few-shot examples!
 
 4. EXECUTE ALL REQUESTED ACTIONS:
    - The user request often contains multiple operations (e.g. "dời lịch chạy bộ và nhắn sếp"). You MUST execute EVERY part!
@@ -65,6 +67,10 @@ EXAMPLES = [
       'behavior': '<tool_call>{"name":"bill_payment.list_bills","arguments":{}}</tool_call>'
                   '<tool_call>{"name":"contacts.search","arguments":{"query":"Bác Ba"}}</tool_call>'
                   '<tool_call>{"name":"contacts.search","arguments":{"query":"Cô giáo Mai"}}</tool_call>'}),
+    # Smart home device status check before control:
+    ({'smart_home.get_status', 'smart_home.light_set'}, {
+      'request': 'Giảm độ sáng đèn phòng khách xuống còn một nửa.',
+      'behavior': '<tool_call>{"name":"smart_home.get_status","arguments":{}}</tool_call>'}),
     # Missing info: no content supplied — ask before doing anything.
     ({'notes.create', 'sys.ask_missing_info'}, {
       'request': 'Tạo một ghi chú giúp tôi.',
@@ -103,7 +109,13 @@ class PromptControls:
         batch=self.system.adapt_messages(batch)
         if self.mode=='steerability':
             allowed={t['name'] for t in tools}
-            examples=[example for required,example in EXAMPLES if required<=allowed][:2]
-            if examples:
+            user_text=' '.join(str(m.get('content','')) for m in messages if m.get('role')=='user').lower()
+            candidates=[example for required,example in EXAMPLES if required<=allowed]
+            if candidates:
+                def score(cand):
+                    req_words=cand['request'].lower().split()
+                    return sum(1 for w in req_words if len(w)>2 and w in user_text)
+                ranked=sorted(candidates,key=score,reverse=True)
+                examples=ranked[:2]
                 batch=self.fewshot.adapt_messages(batch,runtime_kwargs={'positive_examples':examples})
         return batch[0]

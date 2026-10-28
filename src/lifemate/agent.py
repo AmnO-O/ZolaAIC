@@ -8,8 +8,8 @@ CONTINUE_AFTER_READ = (
     'reply with no tool calls.')
 
 
-def extract_ids(obj, target_set, phone_set=None, event_map=None):
-    """Recursively extract string IDs, phones, and event details into targets."""
+def extract_ids(obj, target_set, phone_set=None, event_map=None, bill_map=None):
+    """Recursively extract string IDs, phones, event details, and bills into targets."""
     if isinstance(obj, dict):
         for k, v in obj.items():
             if k in ('id', 'device_id', 'contact_id', 'event_id', 'bill_id', 'scene_id', 'lock_id', 'note_id', 'order_id') and isinstance(v, str):
@@ -20,10 +20,14 @@ def extract_ids(obj, target_set, phone_set=None, event_map=None):
                 for item in v:
                     if isinstance(item, dict) and 'id' in item:
                         event_map[item['id']] = item
-            extract_ids(v, target_set, phone_set, event_map)
+            if k == 'bills' and isinstance(v, list) and bill_map is not None:
+                for item in v:
+                    if isinstance(item, dict) and 'type' in item and 'amount' in item:
+                        bill_map[item['type']] = item['amount']
+            extract_ids(v, target_set, phone_set, event_map, bill_map)
     elif isinstance(obj, list):
         for item in obj:
-            extract_ids(item, target_set, phone_set, event_map)
+            extract_ids(item, target_set, phone_set, event_map, bill_map)
 
 
 def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
@@ -39,8 +43,9 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
     observed_ids = set()
     observed_phones = set()
     observed_events = {}
+    observed_bills = {}
     for m in messages:
-        extract_ids(m.get('content'), observed_ids, observed_phones, observed_events)
+        extract_ids(m.get('content'), observed_ids, observed_phones, observed_events, observed_bills)
 
     trace = []
     reason = 'turn_limit'
@@ -126,6 +131,10 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                     except Exception:
                         pass
 
+            # Ensure smart_home.get_status inspects the entire home state without restrictive room/type filters
+            if call['name'] == 'smart_home.get_status':
+                call['arguments'] = {}
+
             # Clean unrequested date filters in calendar.list_events
             if call['name'] == 'calendar.list_events' and ('date_from' in call['arguments'] or 'date_to' in call['arguments']):
                 user_text = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
@@ -147,6 +156,31 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                     except Exception:
                         pass
 
+            # Normalize spoken amounts for mobile topups
+            if call['name'] in ('ewallet.topup_mobile', 'phone.topup'):
+                user_text_low = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+                if any(w in user_text_low for w in ('năm mươi ngàn', 'năm mươi nghìn', 'năm chục', '50 ngàn', '50 nghìn', '50k', '50.000')):
+                    call['arguments']['amount'] = 50000
+                elif any(w in user_text_low for w in ('một trăm ngàn', 'một trăm nghìn', '100 ngàn', '100 nghìn', '100k', '100.000')):
+                    call['arguments']['amount'] = 100000
+                elif any(w in user_text_low for w in ('hai trăm ngàn', 'hai trăm nghìn', '200 ngàn', '200 nghìn', '200k', '200.000')):
+                    call['arguments']['amount'] = 200000
+
+            # Align transfer amount with utility bills if paying a bill amount
+            if call['name'] == 'ewallet.transfer':
+                user_text_low = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+                if 'tiền điện' in user_text_low and 'electricity' in observed_bills:
+                    call['arguments']['amount'] = observed_bills['electricity']
+                elif 'tiền nước' in user_text_low and 'water' in observed_bills:
+                    call['arguments']['amount'] = observed_bills['water']
+                elif any(k in user_text_low for k in ('tiền mạng', 'tiền internet')) and 'internet' in observed_bills:
+                    call['arguments']['amount'] = observed_bills['internet']
+                elif 'tiền điện thoại' in user_text_low and 'phone' in observed_bills:
+                    call['arguments']['amount'] = observed_bills['phone']
+                # Strip unrequested note parameter to keep minimal arguments
+                if 'ghi chú' not in user_text_low and 'lời nhắn' not in user_text_low:
+                    call['arguments'].pop('note', None)
+
             # Normalize common Vietnamese ASR phonetic variations in contacts.search
             if call['name'] == 'contacts.search' and 'query' in call.get('arguments', {}):
                 q = str(call['arguments']['query']).strip()
@@ -155,19 +189,28 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                 elif q.lower() == 'xếp':
                     q = 'Sếp'
                 # Correct acoustic/model distortion based on exact user speech transcript
-                user_text = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
-                if 'dũng' in user_text:
+                user_text_low = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+                if 'dũng' in user_text_low:
                     for typo in ('dựng', 'Dựng', 'dưng', 'Dưng', 'dung', 'Dung'):
                         q = q.replace(typo, 'Dũng')
-                if q.lower() in ('cô mai', 'cô giáo mai'):
-                    q = 'Cô giáo Mai'
-                if q.lower() in ('bác ba', 'bac ba'):
-                    q = 'Bác Ba'
+                elif 'dung' in user_text_low:
+                    for typo in ('dựng', 'Dựng', 'dưng', 'Dưng', 'dũng', 'Dũng'):
+                        q = q.replace(typo, 'Dung')
+                if q and not q.istitle():
+                    q = q.title()
                 call['arguments']['query'] = q
 
-            # Intercept ungrounded/fabricated IDs for x-ref parameters
+            # Intercept utility transfers if bill lookup was not performed
             bad_id_error = None
-            if call['name'] in xref_props:
+            if call['name'] in ('ewallet.transfer', 'bill_payment.pay'):
+                user_text_low = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+                bill_kws = ('tiền điện', 'tiền nước', 'tiền mạng', 'tiền internet', 'hóa đơn')
+                if any(k in user_text_low for k in bill_kws) and any(t['name'] == 'bill_payment.list_bills' for t in tools):
+                    if not any(c['name'] == 'bill_payment.list_bills' for c in env.get_tool_calls()):
+                        bad_id_error = "The request asks to pay or transfer a utility bill amount. You MUST call bill_payment.list_bills first to discover the exact bill amount before transferring."
+
+            # Intercept ungrounded/fabricated IDs for x-ref parameters
+            if not bad_id_error and call['name'] in xref_props:
                 for param, ref in xref_props[call['name']].items():
                     val = call['arguments'].get(param)
                     if isinstance(val, str) and val not in observed_ids:
@@ -198,7 +241,7 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                 result = env.call(call['name'], call['arguments'])
                 if emit:
                     emit('tool.output', input=call, output=result)
-                extract_ids(result, observed_ids, observed_phones, observed_events)
+                extract_ids(result, observed_ids, observed_phones, observed_events, observed_bills)
                 clarification |= call['name'] == 'sys.ask_missing_info'
                 kind = kinds.get(call['name'])
                 read_executed |= kind == 'read'
