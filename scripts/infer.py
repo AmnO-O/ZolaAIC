@@ -26,7 +26,7 @@ def main():
     parser.add_argument('--ids', help='JSON array of sample IDs, or train split manifest')
     parser.add_argument('--limit', type=int)
     parser.add_argument('--step-log', help='Optional detailed development JSONL trace, separate from submission')
-    parser.add_argument('--verbose-steps', action='store_true', help='Print step names live; requires --step-log')
+    parser.add_argument('--verbose-steps', action='store_true', help='Print full step inputs/outputs live; requires --step-log')
     parser.add_argument('--train-transcripts', action='store_true', help='Development only: use train reference transcripts instead of ASR')
     parser.add_argument('--budget-seconds',type=float,default=27,
                         help='Per-sample development budget; competition deployment still requires under 30 seconds')

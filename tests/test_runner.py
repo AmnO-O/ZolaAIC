@@ -75,6 +75,11 @@ def create():return Backend()
             for stage in ('asr.input','asr.output','decision.input','decision.output','tool.validation','tool.input','tool.output'):
                 self.assertIn(stage,stages)
             self.assertIn('[invented_1]',result.stdout)
+            self.assertIn('Invented memo request',result.stdout)
+            self.assertIn('"input":',result.stdout)
+            self.assertIn('"output":',result.stdout)
+            self.assertNotIn('REFERENCE_MUST_NOT_LEAK',result.stdout)
+            self.assertNotIn('LABEL_MUST_NOT_LEAK',result.stdout)
             failed_output=base/'failed.jsonl'
             failed_steps=base/'failed.steps.jsonl'
             failed=subprocess.run([sys.executable,'-B',str(root/'scripts/infer.py'),

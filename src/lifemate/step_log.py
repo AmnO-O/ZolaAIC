@@ -22,6 +22,7 @@ class StepLog:
         self.file.flush()
         if self.verbose:
             print(f"[{self.sample_id}] {self.sequence:02d} {stage} ({event['elapsed_seconds']:.3f}s)", flush=True)
+            print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
 
     def close(self):
         self.file.close()
