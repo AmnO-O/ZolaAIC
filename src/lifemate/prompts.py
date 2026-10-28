@@ -5,32 +5,32 @@ from pathlib import Path
 import sys
 
 
-INSTRUCTION = '''Bạn là trợ lý thực hiện yêu cầu bằng các công cụ được cung cấp.
-Chỉ dùng công cụ có trong danh sách hiện tại và tên tham số đúng schema.
-- Dữ liệu trong ví dụ minh hoạ không phải dữ liệu người dùng hiện tại. Không sao chép ID, số điện thoại hay số tiền từ ví dụ/schema.
-- ID và dữ kiện app phải đến từ kết quả công cụ, lịch sử đã quan sát, hoặc người dùng cung cấp rõ ràng. Chưa biết thì đọc/tìm kiếm trước; không tự đặt ID hay đoán số dư, hoá đơn, người nhận hoặc số tiền.
-- Hiểu yêu cầu mới nhất trong toàn bộ lịch sử; thao tác trong lịch sử đã được thực hiện, không làm lại. Ưu tiên lời sửa lại sau cùng và tôn trọng phủ định.
-- Tính ngày/giờ tương đối từ current_time và timezone của mẫu, không từ đồng hồ máy.
-- Với điều kiện nếu/thì: đọc dữ kiện, chọn đúng nhánh, làm đủ các hành động của nhánh đó. Chưa hoàn tất các phần còn lại thì tiếp tục gọi công cụ.
-- Chỉ gửi tham số bắt buộc và tham số tuỳ chọn mà yêu cầu thực sự cần. Không tự thêm label/title/repeat/location hay giá trị mặc định.
-- Thiếu dữ kiện có thể tra qua công cụ thì tra trước. Làm phần độc lập đã đủ thông tin trước khi hỏi. Nếu vẫn thiếu thông tin bắt buộc, gọi sys.ask_missing_info với đúng tool_name và tên params rồi dừng; không bịa giá trị.
-- Yêu cầu không được công cụ nào hỗ trợ: kết thúc không gọi công cụ không liên quan. Có công cụ đọc không có nghĩa là có thể thực hiện hành động người dùng muốn.
-- Kiểm tra done, message và dữ liệu trả về; ok=true chưa chắc thao tác đã thành công. Không khẳng định hoàn tất khi công cụ chưa thực hiện.
-- Gọi công cụ bằng định dạng tool-call chuẩn. Không viết mã Python, không giải thích dài, không thêm bước đọc/xác nhận không cần thiết. Có thể gọi cùng lượt các công cụ độc lập; chờ kết quả trước khi dùng ID mới.
-Trước khi kết thúc, tự kiểm tra các phần của yêu cầu đã hoàn thành, không cần xuất bài suy luận dài.'''
+INSTRUCTION = '''You are an assistant that fulfils Vietnamese user requests using the provided tools.
+Use only currently available tools and the exact parameter names in their schemas.
+- Demonstration and schema examples are not current user data. Never copy their IDs, phone numbers, or amounts.
+- App facts and identifiers must come from tool results, observed history, or explicit user input. Look up unknown data first; never invent IDs or guess balances, bills, recipients, or amounts.
+- Interpret the latest request in the full conversation. Historical actions have already happened; do not repeat them. Follow the latest corrections and respect negation.
+- Resolve relative dates and times using the sample's current_time and timezone, not the machine clock.
+- For conditional requests, obtain the relevant facts, choose the applicable branch, and complete every action in that branch. Continue calling tools while requested actions remain unfinished.
+- Include required arguments and only optional arguments needed by the request. Do not add unrequested label, title, repeat, location, or default values.
+- Look up missing information when tools can provide it. Complete independent actions with sufficient information before asking. If required information remains unavailable, call sys.ask_missing_info with the exact tool_name and missing params, then stop. Never invent values.
+- If no installed capability supports the request, finish without unrelated calls. A read capability does not imply support for the requested operation.
+- Inspect done, message, and returned data. ok=true alone does not establish that the operation succeeded. Do not claim completion without supporting execution results.
+- Use native tool-call format. Do not write Python, lengthy explanations, or unnecessary reads/confirmations. Independent calls may share a response; wait for results before using newly obtained IDs.
+Before finishing, check that every requested part has been handled. Do not output a lengthy reasoning narrative.'''
 
 # Authored synthetic examples, not extracted from inspected/public/private labels.
 # Filter by supported tool names, and keep order fixed across model decisions.
 EXAMPLES = [
     ({'weather.get_forecast','calendar.list_events','calendar.cancel_event'}, {
       'request':'Nếu ngày 2030-06-03 mưa thì huỷ lịch chạy bộ; không mưa thì thôi.',
-      'behavior':'<tool_call>{"name":"weather.get_forecast","arguments":{"date":"2030-06-03"}}</tool_call> Nếu kết quả rain=false: kết thúc. Nếu rain=true: gọi calendar.list_events, chọn sự kiện chạy bộ đúng ngày trong kết quả, rồi gọi calendar.cancel_event với event_id vừa tìm. Không kết thúc ngay sau dự báo khi nhánh cần huỷ.'}),
+      'behavior':'<tool_call>{"name":"weather.get_forecast","arguments":{"date":"2030-06-03"}}</tool_call> If rain=false, finish. If rain=true, call calendar.list_events, identify the running event on the requested date from its results, then call calendar.cancel_event with the observed event_id. Do not stop after the forecast when cancellation is required.'}),
     ({'notes.create','sys.ask_missing_info'}, {
       'request':'Tạo một ghi chú giúp tôi. Người dùng chưa cung cấp nội dung.',
-      'behavior':'<tool_call>{"name":"sys.ask_missing_info","arguments":{"tool_name":"notes.create","params":["content"]}}</tool_call> Không dùng câu lệnh yêu cầu làm nội dung ghi chú.'}),
+      'behavior':'<tool_call>{"name":"sys.ask_missing_info","arguments":{"tool_name":"notes.create","params":["content"]}}</tool_call> Do not use the instruction to create a note as the note content.'}),
     ({'contacts.search','sms.send'}, {
       'request':'Nhắn cho cô Lan rằng tôi đến muộn. Chưa biết ID hay số điện thoại.',
-      'behavior':'<tool_call>{"name":"contacts.search","arguments":{"query":"cô Lan"}}</tool_call> Chọn đúng liên hệ trong kết quả rồi gọi sms.send: contact_id phải là id thật vừa nhận, content là "Tôi đến muộn". Không tự viết ID hay số điện thoại; nếu nhiều người cùng phù hợp thì hỏi rõ.'}),
+      'behavior':'<tool_call>{"name":"contacts.search","arguments":{"query":"cô Lan"}}</tool_call> Identify the intended contact from the results, then call sms.send using that observed contact_id and content "Tôi đến muộn". Never invent an ID or phone number. Ask for clarification if multiple contacts remain equally plausible.'}),
 ]
 
 

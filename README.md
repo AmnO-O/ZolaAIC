@@ -8,6 +8,8 @@ For Kaggle, import [notebooks/kaggle_pipeline.ipynb](notebooks/kaggle_pipeline.i
 
 The notebook now includes the [adaptive agent experiment](ADAPTIVE_AGENT.md): catalog-based tool selection with recovery, optional bounded planning, observed-ID checks, action tracking, and explicit completion. It defaults to system-only prompting and planning off so the changes can be compared independently. The command-line default remains the legacy controller.
 
+System behavior instructions, planner/controller instructions, and demonstration guidance are written in English. User requests, ASR transcripts, profile values, tool results, and catalog descriptions retain their supplied language. Tool names and schemas are preserved exactly. The language change has not been benchmarked for accuracy or speed.
+
 ## Setup
 
 Use Python 3.11+ and a CUDA-capable environment for the LLM:
