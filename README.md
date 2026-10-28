@@ -6,6 +6,8 @@ Audio and conversation history → local ASR → controlled LLM tool calls → o
 
 For Kaggle, import [notebooks/kaggle_pipeline.ipynb](notebooks/kaggle_pipeline.ipynb) and follow the [notebook instructions](notebooks/README.md). It clones this repository, prepares models, and runs on your attached dataset.
 
+To generate a complete public-test submission, use [notebooks/kaggle_public_test.ipynb](notebooks/kaggle_public_test.ipynb). It runs all public audio samples, reports progress, and validates complete coverage/structure before exporting `result/submission.jsonl` for manual submission. It does not access train labels, compute public-test accuracy, or submit automatically.
+
 The pipeline uses one bounded observe-act controller: the model may return several independent tool calls per decision, and the loop stops on an empty decision, a clarification request, eight decisions, or the deadline. There is no separate planner model. Full installed schemas are the default; experimental pruning (`LIFEMATE_TOOL_PRUNING=1`) retains the full catalog for recovery.
 
 The controller preserves explicit amounts, recipients, dates, addresses, names, and lookup filters instead of guessing replacements. It grounds IDs/phone numbers from actual current or historical observations and explicit user input. Only exact profile-address aliases and unambiguous observed event locations are resolved; an omitted event end can preserve its observed duration when rescheduling. This is validation and limited normalization, not a complete semantic correctness guarantee.

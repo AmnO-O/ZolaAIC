@@ -1,5 +1,11 @@
 # Kaggle notebook
 
+For a full public-test submission, use [kaggle_public_test.ipynb](kaggle_public_test.ipynb). It fixes the split to `public_test`, defaults to `LIMIT=None` (all samples), audio inference, deterministic mode, full installed tools, a 27-second budget, and detailed logging off. It prints sample progress and saves logs/timing. There is no train evaluation or reference-transcript path. After checking complete IDs, JSON structure, permitted tool names, and SHA-256 hash format, it exports `/kaggle/working/result/submission.jsonl` for manual download/submission. A subset, duplicate IDs, missing rows, or failed inference process prevents final export. This validation does not prove state correctness or compute the official score. Existing final results are never overwritten with different content.
+
+To run it: import into a private Kaggle notebook, attach `amnpham/zalochallenge`, enable GPU and Internet, then run all cells. Check `DATASET_ROOT` against the Input panel. Source/model setup uses Internet; inference loads local assets. Save a notebook version to retain output files. The notebook records the resolved source commit; set `REVISION` to a commit hash for repeatable source selection. It never submits to the leaderboard automatically.
+
+The generic notebook below remains useful for small train/debug runs with full step inspection.
+
 The notebook uses the single bounded observe-act controller, with `PROMPT_MODE="steerability"` and `TOOL_PRUNING=False`. Use `PROMPT_MODE="system"` for an ablation without demonstrations. Keep these settings and `BUDGET_SECONDS` fixed across comparisons. The checked-in `LIMIT=1` is a small debug run, not a representative benchmark.
 
 The controller preserves explicit call values and filters, reuses actual historical evidence, and distinguishes attempted from successful execution. With pruning enabled experimentally, it expands to full schemas before an empty decision can finish or when an omitted permitted tool is proposed. No additional ToolEnv is created. If session creation/export fails, other samples continue, but that row is omitted rather than given a fake hash; the process ultimately exits nonzero and the file is partial. Inspect the trace before using it.
