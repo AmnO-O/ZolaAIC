@@ -2,7 +2,7 @@
 import time
 
 
-def run_agent(env, decide, messages, tools, deadline, max_turns=12):
+def run_agent(env, decide, messages, tools, deadline, max_turns=12, emit=None):
     """decide(messages, tools, remaining_seconds) returns calls or [] to finish.
 
     Backend must enforce its own timeout and 16K token limit. This controller
@@ -15,7 +15,11 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=12):
         if remaining <= 0:
             reason = 'deadline'
             break
+        if emit:
+            emit('decision.input', input={'messages': messages, 'tools': tools}, remaining_seconds=remaining)
         calls = decide(messages, tools, remaining)
+        if emit:
+            emit('decision.output', output=calls)
         if not isinstance(calls, list):
             raise ValueError('Backend must return a list of tool calls')
         if not calls:
@@ -30,10 +34,16 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=12):
             if not isinstance(call, dict) or not isinstance(call.get('name'), str) or not isinstance(call.get('arguments'), dict):
                 raise ValueError('Malformed tool call')
             check = env.validate(call['name'], call['arguments'])
+            if emit:
+                emit('tool.validation', input=call, output=check)
             if not check['ok']:
                 result = {'validation_error': check['error'], 'executed': False}
             else:
+                if emit:
+                    emit('tool.input', input=call)
                 result = env.call(call['name'], call['arguments'])
+                if emit:
+                    emit('tool.output', input=call, output=result)
                 clarification |= call['name'] == 'sys.ask_missing_info'
             messages.append({'role': 'tool', 'name': call['name'], 'content': result})
             trace.append({'call': call, 'result': result})

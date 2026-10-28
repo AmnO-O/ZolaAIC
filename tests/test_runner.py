@@ -40,6 +40,8 @@ def ToolEnv(split,sample_id,root):
 class Backend:
  def transcribe(self,path,remaining):return 'Invented memo request'
  def decide(self,messages,tools,remaining):
+  import os
+  if os.environ.get('SIMULATE_FAILURE')=='1':raise RuntimeError('invented model failure')
   assert 'REFERENCE_MUST_NOT_LEAK' not in str(messages)
   assert 'LABEL_MUST_NOT_LEAK' not in str(messages)
   if any(m['role']=='tool' for m in messages):return []
@@ -50,7 +52,8 @@ def create():return Backend()
             environment=os.environ.copy()
             environment['PYTHONPATH']=str(base)
             result=subprocess.run([sys.executable,'-B',str(root/'scripts/infer.py'),
-                '--split-dir',str(split),'--backend','fake_backend:create','--budget-seconds','60','--output',str(output)],
+                '--split-dir',str(split),'--backend','fake_backend:create','--budget-seconds','60','--output',str(output),
+                '--step-log',str(base/'steps.jsonl'),'--verbose-steps'],
                 env=environment,capture_output=True,text=True,timeout=20)
             self.assertEqual(result.returncode,0,result.stderr)
             row=json.loads(output.read_text())
@@ -59,6 +62,30 @@ def create():return Backend()
             trace=json.loads(output.with_suffix('.trace.jsonl').read_text())
             self.assertEqual(trace['termination'],'finished')
             self.assertEqual(trace['budget_seconds'],60)
+            raw_steps=(base/'steps.jsonl').read_text(encoding='utf-8')
+            self.assertNotIn('REFERENCE_MUST_NOT_LEAK',raw_steps)
+            self.assertNotIn('LABEL_MUST_NOT_LEAK',raw_steps)
+            events=[json.loads(line) for line in raw_steps.splitlines()]
+            stages=[event['stage'] for event in events]
+            self.assertEqual(stages[0],'sample.input')
+            self.assertEqual(stages[-1],'sample.output')
+            self.assertEqual(events[-1]['output'],row)
+            self.assertEqual([event['step'] for event in events],list(range(1,len(events)+1)))
+            self.assertTrue(all(event['id']=='invented_1' for event in events))
+            for stage in ('asr.input','asr.output','decision.input','decision.output','tool.validation','tool.input','tool.output'):
+                self.assertIn(stage,stages)
+            self.assertIn('[invented_1]',result.stdout)
+            failed_output=base/'failed.jsonl'
+            failed_steps=base/'failed.steps.jsonl'
+            failed=subprocess.run([sys.executable,'-B',str(root/'scripts/infer.py'),
+                '--split-dir',str(split),'--backend','fake_backend:create','--output',str(failed_output),
+                '--step-log',str(failed_steps)],env={**environment,'SIMULATE_FAILURE':'1'},
+                capture_output=True,text=True,timeout=20)
+            self.assertEqual(failed.returncode,0,failed.stderr)
+            failure_events=[json.loads(line) for line in failed_steps.read_text().splitlines()]
+            self.assertIn('sample.error',[event['stage'] for event in failure_events])
+            self.assertEqual(failure_events[-1]['termination'],'error')
+            self.assertEqual(failure_events[-1]['output']['tool_calls'],[])
 
 
 if __name__=='__main__':unittest.main()

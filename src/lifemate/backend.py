@@ -108,6 +108,11 @@ class LocalBackend:
         budget = min(384, 16384-tokens)
         if budget <= 0:
             raise ValueError('Context exceeds 16K; refusing silent truncation')
+        emit = getattr(self, 'trace_event', None)
+        if emit:
+            emit('llm.input', input={'messages': turns, 'tools': native_tools,
+                 'rendered_prompt': self.tokenizer.decode(encoded['input_ids'][0], skip_special_tokens=False)},
+                 input_tokens=tokens, max_new_tokens=budget)
         encoded = {k: v.to(self.device) for k, v in encoded.items()}
         with self.torch.inference_mode():
             # Deterministic SDPA on T4 can fall back to quadratic-memory math
@@ -129,6 +134,8 @@ class LocalBackend:
                 stopping_criteria=StoppingCriteriaList([Deadline()]),
                 pad_token_id=self.tokenizer.eos_token_id)
         text = self.tokenizer.decode(generated[0, tokens:], skip_special_tokens=True)
+        if emit:
+            emit('llm.output', output=text, output_tokens=generated.shape[-1]-tokens)
         self.stats.append({'input_tokens': tokens, 'output_tokens': generated.shape[-1]-tokens})
         if time.monotonic() >= end:
             raise TimeoutError('Model generation deadline reached')

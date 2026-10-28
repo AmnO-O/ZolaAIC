@@ -39,6 +39,8 @@ python scripts/infer.py --split-dir /path/to/public_test --backend lifemate.back
 
 The runner refuses to overwrite an existing output. Defaults: `LIFEMATE_ASR_KIND=gipformer`, `LIFEMATE_PROMPT_MODE=steerability`, 27-second sample budget, and a 16,384-token context limit. Prompt modes `system` and `baseline` support controlled comparisons. The competition target is 30 seconds per sample; A30 timing and deployment validation are pending.
 
+For development, add `--step-log result/steps.jsonl --verbose-steps` to save every query's observed processing inputs/outputs and print live stage names. The notebook enables this by default and provides an expandable query viewer. Full prompts, tool responses, and context remain in this separate private diagnostic file; the submission schema stays unchanged. Disable detailed logging when measuring runtime.
+
 ## Development
 
 ```bash

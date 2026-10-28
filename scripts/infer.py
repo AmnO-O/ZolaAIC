@@ -15,6 +15,7 @@ import math
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from lifemate.agent import run_agent
 from lifemate.input_adapter import SplitInput
+from lifemate.step_log import StepLog
 
 
 def main():
@@ -24,15 +25,26 @@ def main():
     parser.add_argument('--output', default='result/submission.jsonl')
     parser.add_argument('--ids', help='JSON array of sample IDs, or train split manifest')
     parser.add_argument('--limit', type=int)
+    parser.add_argument('--step-log', help='Optional detailed development JSONL trace, separate from submission')
+    parser.add_argument('--verbose-steps', action='store_true', help='Print step names live; requires --step-log')
     parser.add_argument('--train-transcripts', action='store_true', help='Development only: use train reference transcripts instead of ASR')
     parser.add_argument('--budget-seconds',type=float,default=27,
                         help='Per-sample development budget; competition deployment still requires under 30 seconds')
     args = parser.parse_args()
     if not math.isfinite(args.budget_seconds) or args.budget_seconds <= 0:
         parser.error('--budget-seconds must be a positive finite number')
+    if args.verbose_steps and not args.step_log:
+        parser.error('--verbose-steps requires --step-log')
+    detail = None
+    if args.step_log:
+        step_path = Path(args.step_log)
+        step_path.parent.mkdir(parents=True, exist_ok=True)
+        detail = StepLog(step_path, verbose=args.verbose_steps)
     split = SplitInput(args.split_dir)
     module, factory = args.backend.split(':', 1)
     backend = getattr(importlib.import_module(module), factory)()
+    if detail:
+        backend.trace_event = detail.emit
     selected = None
     if args.ids:
         selected = json.loads(Path(args.ids).read_text(encoding='utf-8'))
@@ -62,30 +74,52 @@ def main():
             count += 1
             start = time.monotonic()
             deadline = start + args.budget_seconds
+            if detail:
+                detail.begin(item['id'], start)
+                detail.emit('sample.input', input=item, budget_seconds=args.budget_seconds)
             env = split.session(item['id'])
+            if detail:
+                detail.emit('session.created', output={'sessions_created': 1})
             try:
+                def transcribe_logged(relative, scope):
+                    audio = split.audio_path(relative)
+                    began = time.monotonic()
+                    if detail:
+                        detail.emit('asr.input', input={'audio_path': str(audio), 'scope': scope,
+                                    'source': 'train_reference' if args.train_transcripts else 'audio'})
+                    text = transcribe(audio, max(0, deadline-time.monotonic()))
+                    if detail:
+                        detail.emit('asr.output', output={'text': text, 'scope': scope}, seconds=time.monotonic()-began)
+                    return text
                 messages = [{'role': 'system', 'content': {
                     'instruction': 'Fulfil the latest user request through the allowed tools. Prior history actions are already applied. Resolve dates using sample context. Ask for unresolved required information; never invent entity IDs.',
                     'context': item['context']}}]
                 for turn in item['history']:
                     if turn['role'] == 'user':
-                        text = transcribe(split.audio_path(turn['audio']), max(0, deadline-time.monotonic()))
+                        text = transcribe_logged(turn['audio'], 'history')
                         messages.append({'role': 'user', 'content': text})
                     else:
                         messages.append(turn)
-                text = transcribe(split.audio_path(item['audio']), max(0, deadline-time.monotonic()))
+                text = transcribe_logged(item['audio'], 'latest')
                 messages.append({'role': 'user', 'content': text})
-                row, log = run_agent(env, backend.decide, messages, split.tools(item), deadline)
+                row, log = run_agent(env, backend.decide, messages, split.tools(item), deadline,
+                                     emit=detail.emit if detail else None)
             except Exception as error:
                 # Keep the same environment and every call made before failure.
                 row = {'tool_calls': env.get_tool_calls(), 'state_hash': env.get_state_hash()}
                 log = {'termination': 'error', 'error_type': type(error).__name__, 'error_message':str(error)}
+                if detail:
+                    detail.emit('sample.error', output=log)
             row['id'] = item['id']
             target.write(json.dumps(row, ensure_ascii=False) + '\n')
             target.flush()
             log.update(id=item['id'], elapsed_seconds=time.monotonic()-start,budget_seconds=args.budget_seconds)
+            if detail:
+                detail.emit('sample.output', output=row, termination=log['termination'])
             logs.write(json.dumps(log, ensure_ascii=False) + '\n')
             logs.flush()
+    if detail:
+        detail.close()
 
 
 if __name__ == '__main__':
