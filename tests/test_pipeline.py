@@ -104,6 +104,31 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([c['name'] for c in row['tool_calls']],['sys.ask_missing_info'])
         self.assertEqual(log['termination'],'clarification')
 
+    def test_ungrounded_xref_rejected_with_validation_error(self):
+        env = FakeEnv()
+        tools_with_xref = [
+            {'name': 'sms.send', 'kind': 'write', 'parameters': {
+                'properties': {'contact_id': {'type': 'string', 'x-ref': 'contacts.contacts'}}}}
+        ]
+        # Attempt to call sms.send with fake ungrounded contact_id
+        decisions = iter([[{'name': 'sms.send', 'arguments': {'contact_id': 'contact_123'}}], []])
+        messages = [{'role': 'user', 'content': 'Nhắn tin cho mẹ'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools_with_xref, time.monotonic() + 5)
+        # Fake call should NOT be executed on env
+        self.assertEqual(row['tool_calls'], [])
+        # Tool result in trace should record validation error
+        self.assertIn('validation_error', log['trace'][0]['result'])
+
+    def test_unrequested_weather_location_is_stripped(self):
+        env = FakeEnv()
+        decisions = iter([[{'name': 'weather.get_forecast', 'arguments': {'date': '2026-11-29', 'location': 'Đà Nẵng'}}], []])
+        # User message did NOT mention Đà Nẵng
+        messages = [{'role': 'user', 'content': 'Nếu mai mưa thì thôi'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(len(row['tool_calls']), 1)
+        self.assertEqual(row['tool_calls'][0]['arguments'], {'date': '2026-11-29'})
+        self.assertNotIn('location', row['tool_calls'][0]['arguments'])
+
     def test_train_labels_and_transcripts_are_removed(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / 'artifacts') as temporary:
             root = Path(temporary)

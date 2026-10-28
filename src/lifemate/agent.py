@@ -8,26 +8,32 @@ CONTINUE_AFTER_READ = (
     'reply with no tool calls.')
 
 
+def extract_ids(obj, target_set):
+    """Recursively extract string IDs from dicts/lists into target_set."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in ('id', 'device_id', 'contact_id', 'event_id', 'bill_id', 'scene_id', 'lock_id', 'note_id', 'order_id') and isinstance(v, str):
+                target_set.add(v)
+            extract_ids(v, target_set)
+    elif isinstance(obj, list):
+        for item in obj:
+            extract_ids(item, target_set)
+
+
 def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None,
               continue_after_read=True):
-    """decide(messages, tools, remaining_seconds) returns calls or [] to finish.
-
-    Each decision may batch independent calls; newly returned IDs are only
-    available on the next decision. The loop is capped at max_turns decisions
-    (gold trajectories use at most six calls, and the sample deadline usually
-    binds first).
-
-    A four-billion-parameter model often reads the data it needs and then ends
-    the turn with prose that describes the remaining action instead of calling
-    a write tool. When that happens, the controller appends one short reminder
-    and allows one more decision. The reminder is bounded to a single retry per
-    sample, only fires when a read succeeded and no write has run, and leaves
-    read-only requests free to finish with no calls.
-
-    Backend must enforce its own timeout and 16K token limit. This controller
-    cannot interrupt a blocking backend. No session reset or hidden-state reads.
-    """
+    """decide(messages, tools, remaining_seconds) returns calls or [] to finish."""
     kinds = {tool['name']: tool.get('kind') for tool in tools}
+    xref_props = {}
+    for tool in tools:
+        for prop, prop_spec in tool.get('parameters', {}).get('properties', {}).items():
+            if 'x-ref' in prop_spec:
+                xref_props.setdefault(tool['name'], {})[prop] = prop_spec['x-ref']
+
+    observed_ids = set()
+    for m in messages:
+        extract_ids(m.get('content'), observed_ids)
+
     trace = []
     reason = 'turn_limit'
     read_executed = False
@@ -63,7 +69,30 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None,
                 break
             if not isinstance(call, dict) or not isinstance(call.get('name'), str) or not isinstance(call.get('arguments'), dict):
                 raise ValueError('Malformed tool call')
-            check = env.validate(call['name'], call['arguments'])
+
+            # Clean optional location in weather if query didn't specify it
+            if call['name'].startswith('weather.') and 'location' in call['arguments']:
+                user_text = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+                loc = str(call['arguments']['location']).lower()
+                if loc not in user_text:
+                    del call['arguments']['location']
+
+            # Intercept ungrounded/fabricated IDs for x-ref parameters
+            bad_id_error = None
+            if call['name'] in xref_props:
+                for param, ref in xref_props[call['name']].items():
+                    val = call['arguments'].get(param)
+                    if isinstance(val, str) and val not in observed_ids:
+                        user_text = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user')
+                        if val not in user_text:
+                            bad_id_error = f"Ungrounded or fabricated ID '{val}' for parameter '{param}' (referenced from {ref}). You MUST call a lookup tool (e.g. contacts.search, calendar.list_events, smart_home.get_status) first to discover the real ID."
+                            break
+
+            if bad_id_error:
+                check = {'ok': False, 'error': bad_id_error}
+            else:
+                check = env.validate(call['name'], call['arguments'])
+
             if emit:
                 emit('tool.validation', input=call, output=check)
             if not check['ok']:
@@ -74,6 +103,7 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None,
                 result = env.call(call['name'], call['arguments'])
                 if emit:
                     emit('tool.output', input=call, output=result)
+                extract_ids(result, observed_ids)
                 clarification |= call['name'] == 'sys.ask_missing_info'
                 kind = kinds.get(call['name'])
                 read_executed |= kind == 'read'
