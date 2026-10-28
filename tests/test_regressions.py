@@ -224,5 +224,23 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(row['tool_calls'],[])
         self.assertTrue(log['expanded_tools'])
 
+    def test_spoken_phone_number_is_grounded_and_accepted(self):
+        batch=[call('ewallet.topup_mobile',phone='09505360367',amount=50000)]
+        actual,_=self.execute([user('Nạp dùm 50 ngàn cho số không chín năm không năm ba sáu không ba sáu bảy nha.')],batch)
+        self.assertEqual(actual,batch)
+
+    def test_event_title_containment_resolves_dropoff(self):
+        batch=[call('ride_hailing.book',pickup='A',dropoff='hội họp phụ huynh',vehicle='car4')]
+        messages=[user('Đặt xe đi hội họp phụ huynh'),result('calendar.list_events',
+            {'events':[{'id':'e1','title':'họp phụ huynh','location':'Trường Nguyễn Bỉnh Khiêm'}]})]
+        actual,_=self.execute(messages,batch)
+        self.assertEqual(actual[0]['arguments']['dropoff'],'Trường Nguyễn Bỉnh Khiêm')
+
+    def test_unresolved_event_destination_without_lookup_fails_validation(self):
+        batch=[call('ride_hailing.book',pickup='A',dropoff='hội họp phụ huynh',vehicle='car4')]
+        actual,log=self.execute([user('Đặt xe đi hội họp phụ huynh')],batch)
+        self.assertEqual(actual,[])
+        self.assertIn('Unresolved event destination',log['trace'][0]['result']['validation_error'])
+
 
 if __name__=='__main__':unittest.main()

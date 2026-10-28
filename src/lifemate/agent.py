@@ -5,10 +5,10 @@ import time
 from .grounding import Evidence, successful
 
 CONTINUE_AFTER_READ = (
-    'No app action has been confirmed successful. If the current request requires '
-    'a change, complete it using observed facts. Respect false conditions, '
-    'negations and corrections. If it only asks for information already answered, '
-    'return no tool calls.')
+    'Review the latest observation: if the user condition is met (e.g. rain occurred, '
+    'price is below threshold, balance is sufficient), execute the required write actions. '
+    'If the condition is NOT met or says "thôi" (do nothing), or the request only asked '
+    'for information, confirm with empty tool calls [].')
 
 
 def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,

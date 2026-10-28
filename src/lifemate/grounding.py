@@ -19,13 +19,82 @@ def phone_key(value):
     return '0' + number[3:] if number.startswith('+84') else number
 
 
+SPOKEN_DIGITS = {
+    'không': '0', 'khong': '0',
+    'một': '1', 'mot': '1', 'mốt': '1',
+    'hai': '2',
+    'ba': '3',
+    'bốn': '4', 'bon': '4', 'tư': '4', 'tu': '4',
+    'năm': '5', 'nam': '5', 'lăm': '5', 'lam': '5',
+    'sáu': '6', 'sau': '6',
+    'bảy': '7', 'bay': '7', 'bẩy': '7', 'bey': '7',
+    'tám': '8', 'tam': '8',
+    'chín': '9', 'chin': '9',
+}
+
+
+def extract_spoken_phones(text):
+    text_norm = unicodedata.normalize('NFC', str(text))
+    tokens = []
+    for m in re.finditer(r'\b[\w\d]+\b', text_norm, re.UNICODE):
+        word = m.group(0).lower()
+        if word in SPOKEN_DIGITS:
+            tokens.append((m.start(), m.end(), SPOKEN_DIGITS[word], m.group(0), True))
+        elif re.fullmatch(r'\d+', word):
+            tokens.append((m.start(), m.end(), word, m.group(0), False))
+        else:
+            tokens.append((m.start(), m.end(), None, m.group(0), False))
+
+    results = []
+    i = 0
+    while i < len(tokens):
+        if tokens[i][2] in ('0', 'không', 'khong') or (tokens[i][2] and tokens[i][2].startswith('0')):
+            j = i
+            digits = []
+            source_parts = []
+            has_spoken_word = False
+            while j < len(tokens) and tokens[j][2] is not None:
+                digits.append(tokens[j][2])
+                source_parts.append(tokens[j][3])
+                if tokens[j][4]:
+                    has_spoken_word = True
+                j += 1
+            digit_str = ''.join(digits)
+            if digit_str.startswith('0') and 10 <= len(digit_str) <= 11 and has_spoken_word:
+                start_char = tokens[i][0]
+                end_char = tokens[j - 1][1]
+                source_text = text_norm[start_char:end_char]
+                results.append({
+                    'recognized_phone': digit_str,
+                    'source_text': source_text,
+                })
+                i = j
+                continue
+        i += 1
+    return results
+
+
 def explicit_phone(value, text):
     number = phone_key(value)
     if not re.fullmatch(r'0\d{8,10}', number):
         return False
     forms = [number, '+84' + number[1:]]
-    return any(re.search(r'(?<!\w)' + r'[\s().-]*'.join(re.escape(c) for c in form) + r'(?!\d)', text)
-               for form in forms)
+    if any(re.search(r'(?<!\w)' + r'[\s().-]*'.join(re.escape(c) for c in form) + r'(?!\d)', text)
+           for form in forms):
+        return True
+    for item in extract_spoken_phones(text):
+        if item['recognized_phone'] == number:
+            return True
+    return False
+
+
+def is_explicit_address(text):
+    text_norm = normalize(text)
+    if re.search(r'\b\d+[/a-zA-Z]*\s+[\w\s]+', text_norm):
+        return True
+    if re.search(r'\b(đường|phố|phường|quận|huyện|thị xã|tp\.?|tỉnh|khu đô thị|khu công nghệ)\b', text_norm):
+        return True
+    return False
 
 
 def identifier_values(obj, key=''):
@@ -65,9 +134,16 @@ class Evidence:
         self.context = {}
         for message in messages:
             content = message.get('content', {})
+            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+            for item in extract_spoken_phones(text):
+                self.phones.add(item['recognized_phone'])
             if message.get('role') == 'system' and isinstance(content, dict):
-                self.context.update(content.get('context', {}))
-                self.phones.update(phone_values(content.get('context', {})))
+                ctx = content.get('context', {})
+                self.context.update(ctx)
+                self.phones.update(phone_values(ctx))
+                for item in ctx.get('spoken_phones', []):
+                    if isinstance(item, dict) and 'recognized_phone' in item:
+                        self.phones.add(item['recognized_phone'])
             if message.get('role') == 'tool' and message.get('name'):
                 self.observe(message['name'], content)
             if message.get('role') == 'assistant':
@@ -143,15 +219,28 @@ class Evidence:
                     args[key] = aliases[normalize(args[key])]
             if 'dropoff' in args:
                 target = normalize(args['dropoff'])
-                candidates = [event for event in self.events.values()
-                              if target and event.get('title') and normalize(event['title']) == target and event.get('location')]
-                locations = {event['location'] for event in candidates}
-                if len(locations) > 1:
-                    return call, 'Ambiguous event destination; identify the intended event before booking.'
-                if len(locations) == 1:
-                    args['dropoff'] = next(iter(locations))
-                elif target in ('chỗ hẹn', 'chỗ họp', 'địa điểm họp', 'địa điểm sự kiện', 'chỗ khám'):
-                    return call, 'Unresolved event destination; inspect the relevant calendar event or ask for clarification.'
+                if not is_explicit_address(target):
+                    target_words = set(target.split())
+                    candidates = []
+                    for event in self.events.values():
+                        if not event.get('location') or not event.get('title'):
+                            continue
+                        ev_title = normalize(event['title'])
+                        if ev_title == target:
+                            candidates.append(event)
+                            continue
+                        ev_words = [w for w in ev_title.split() if len(w) > 1]
+                        if len(ev_words) >= 2 and all(w in target_words for w in ev_words):
+                            candidates.append(event)
+                        elif len(target_words) >= 2 and all(w in set(ev_title.split()) for w in target_words):
+                            candidates.append(event)
+                    locations = {event['location'] for event in candidates if event.get('location')}
+                    if len(locations) > 1:
+                        return call, 'Ambiguous event destination; identify the intended event before booking.'
+                    if len(locations) == 1:
+                        args['dropoff'] = next(iter(locations))
+                    elif target in ('chỗ hẹn', 'chỗ họp', 'địa điểm họp', 'địa điểm sự kiện', 'chỗ khám') or re.search(r'\b(họp|hẹn|sự kiện|khám bệnh|đám cưới|sinh nhật)\b', target):
+                        return call, 'Unresolved event destination; inspect the relevant calendar event or ask for clarification.'
         if name == 'calendar.update_event' and 'start' in args and 'end' not in args:
             event = self.events.get(args.get('event_id'), {})
             text = normalize(self.latest_text)

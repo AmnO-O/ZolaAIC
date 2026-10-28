@@ -15,6 +15,7 @@ import math
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from lifemate.agent import run_agent
+from lifemate.grounding import extract_spoken_phones
 from lifemate.input_adapter import SplitInput
 from lifemate.routing import SafeToolRouter, clean_context_for_prompt
 from lifemate.step_log import StepLog
@@ -100,20 +101,38 @@ def main():
                     if detail:
                         detail.emit('asr.output', output={'text': text, 'scope': scope}, seconds=time.monotonic()-began)
                     return text
+                context_payload = clean_context_for_prompt(item['context'])
                 messages = [{'role': 'system', 'content': {
                     'instruction': 'Fulfil the latest user request through the allowed tools. Prior history actions are already applied. Resolve dates using sample context. Ask for unresolved required information; never invent entity IDs.',
-                    'context': clean_context_for_prompt(item['context'])}}]
+                    'context': context_payload}}]
                 all_text = []
                 for turn in item['history']:
                     if turn['role'] == 'user':
                         text = transcribe_logged(turn['audio'], 'history')
                         all_text.append(text)
-                        messages.append({'role': 'user', 'content': text})
+                        spoken = extract_spoken_phones(text)
+                        content = text
+                        if spoken:
+                            content += '\n' + '\n'.join(
+                                f"[recognized_phone: {p['recognized_phone']} from '{p['source_text']}']"
+                                for p in spoken
+                            )
+                        messages.append({'role': 'user', 'content': content})
                     else:
                         messages.append(turn)
                 text = transcribe_logged(item['audio'], 'latest')
                 all_text.append(text)
-                messages.append({'role': 'user', 'content': text})
+                spoken = extract_spoken_phones(text)
+                content = text
+                if spoken:
+                    content += '\n' + '\n'.join(
+                        f"[recognized_phone: {p['recognized_phone']} from '{p['source_text']}']"
+                        for p in spoken
+                    )
+                messages.append({'role': 'user', 'content': content})
+                all_spoken = extract_spoken_phones(' '.join(all_text))
+                if all_spoken:
+                    context_payload['spoken_phones'] = all_spoken
                 tools = split.tools(item)
                 pruned_tools = SafeToolRouter(tools).route(
                     ' '.join(all_text),
