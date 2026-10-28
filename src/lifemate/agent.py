@@ -8,8 +8,8 @@ CONTINUE_AFTER_READ = (
     'reply with no tool calls.')
 
 
-def extract_ids(obj, target_set, phone_set=None, event_map=None, bill_map=None):
-    """Recursively extract string IDs, phones, event details, and bills into targets."""
+def extract_ids(obj, target_set, phone_set=None, event_map=None, bill_map=None, contact_map=None):
+    """Recursively extract string IDs, phones, event details, bills, and contacts into targets."""
     if isinstance(obj, dict):
         for k, v in obj.items():
             if k in ('id', 'device_id', 'contact_id', 'event_id', 'bill_id', 'scene_id', 'lock_id', 'note_id', 'order_id') and isinstance(v, str):
@@ -24,10 +24,14 @@ def extract_ids(obj, target_set, phone_set=None, event_map=None, bill_map=None):
                 for item in v:
                     if isinstance(item, dict) and 'type' in item and 'amount' in item:
                         bill_map[item['type']] = item['amount']
-            extract_ids(v, target_set, phone_set, event_map, bill_map)
+            if k == 'contacts' and isinstance(v, list) and contact_map is not None:
+                for item in v:
+                    if isinstance(item, dict) and 'id' in item and 'name' in item:
+                        contact_map[item['id']] = item['name']
+            extract_ids(v, target_set, phone_set, event_map, bill_map, contact_map)
     elif isinstance(obj, list):
         for item in obj:
-            extract_ids(item, target_set, phone_set, event_map, bill_map)
+            extract_ids(item, target_set, phone_set, event_map, bill_map, contact_map)
 
 
 def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
@@ -44,8 +48,9 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
     observed_phones = set()
     observed_events = {}
     observed_bills = {}
+    observed_contacts = {}
     for m in messages:
-        extract_ids(m.get('content'), observed_ids, observed_phones, observed_events, observed_bills)
+        extract_ids(m.get('content'), observed_ids, observed_phones, observed_events, observed_bills, observed_contacts)
 
     trace = []
     reason = 'turn_limit'
@@ -88,6 +93,12 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
 
             reason = 'finished'
             break
+        # Filter redundant get_quotes if book is also called and user requested direct booking
+        if any(c.get('name') == 'ride_hailing.book' for c in calls) and any(c.get('name') == 'ride_hailing.get_quotes' for c in calls):
+            user_text_low = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+            if not any(k in user_text_low for k in ('báo giá', 'hỏi giá', 'so sánh giá', 'rẻ nhất', 'bao nhiêu tiền')):
+                calls = [c for c in calls if c.get('name') != 'ride_hailing.get_quotes']
+
         messages.append({'role': 'assistant', 'tool_calls': calls})
         clarification = False
         for call in calls:
@@ -131,8 +142,8 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                     except Exception:
                         pass
 
-            # Ensure smart_home.get_status inspects the entire home state without restrictive room/type filters
-            if call['name'] == 'smart_home.get_status':
+            # Ensure discovery tools inspect complete state without restrictive filters
+            if call['name'] in ('smart_home.get_status', 'bill_payment.list_bills'):
                 call['arguments'] = {}
 
             # Clean unrequested date filters in calendar.list_events
@@ -177,9 +188,60 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                     call['arguments']['amount'] = observed_bills['internet']
                 elif 'tiền điện thoại' in user_text_low and 'phone' in observed_bills:
                     call['arguments']['amount'] = observed_bills['phone']
+                # Disambiguate contact_id based on transfer target in user text
+                if 'contact_id' in call['arguments'] and observed_contacts:
+                    import re
+                    m_rec = re.search(r'(?:chuyển|gửi).*?\s+cho\s+([a-zA-Zà-ỹÀ-Ỹ\s]+?)(?=\s+(?:số|tiền|đúng|hóa|nhé|\.|$))', user_text_low)
+                    if m_rec:
+                        target_phrase = m_rec.group(1).strip()
+                        for cid, cname in observed_contacts.items():
+                            cname_low = cname.lower()
+                            if target_phrase in cname_low or any(w in cname_low for w in target_phrase.split() if len(w) > 2):
+                                call['arguments']['contact_id'] = cid
+                                break
                 # Strip unrequested note parameter to keep minimal arguments
                 if 'ghi chú' not in user_text_low and 'lời nhắn' not in user_text_low:
                     call['arguments'].pop('note', None)
+
+            # Resolve relative addresses (công ty, nhà, calendar event) in ride hailing
+            if call['name'] in ('ride_hailing.book', 'ride_hailing.get_quotes'):
+                home_addr, work_addr = None, None
+                for m in messages:
+                    c = m.get('content')
+                    if isinstance(c, dict):
+                        prof = c.get('context', {}).get('user_profile', {})
+                        home_addr = prof.get('home_address')
+                        work_addr = prof.get('work_address')
+                        if home_addr or work_addr:
+                            break
+
+                user_text_low = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+
+                # Resolve pickup
+                p = str(call['arguments'].get('pickup', '')).lower()
+                if any(w in p for w in ('công ty', 'văn phòng', 'chỗ làm')) and work_addr:
+                    call['arguments']['pickup'] = work_addr
+                elif any(w in p for w in ('nhà', 'ở nhà')) and home_addr:
+                    call['arguments']['pickup'] = home_addr
+
+                # Resolve dropoff
+                d = str(call['arguments'].get('dropoff', '')).lower()
+                if any(w in d for w in ('nhà', 'về nhà')) and home_addr:
+                    call['arguments']['dropoff'] = home_addr
+                elif any(w in d for w in ('công ty', 'văn phòng', 'chỗ làm')) and work_addr:
+                    call['arguments']['dropoff'] = work_addr
+                else:
+                    for evt in observed_events.values():
+                        if isinstance(evt, dict):
+                            loc = evt.get('location')
+                            title = str(evt.get('title', '')).lower()
+                            if loc and (title in d or any(w in d for w in title.split() if len(w) > 2) or any(w in user_text_low for w in title.split() if len(w) > 2)):
+                                call['arguments']['dropoff'] = loc
+                                break
+
+                # Strip unrequested payment parameter
+                if 'thanh toán' not in user_text_low and 'trả bằng' not in user_text_low:
+                    call['arguments'].pop('payment', None)
 
             # Normalize common Vietnamese ASR phonetic variations in contacts.search
             if call['name'] == 'contacts.search' and 'query' in call.get('arguments', {}):
@@ -208,6 +270,14 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                 if any(k in user_text_low for k in bill_kws) and any(t['name'] == 'bill_payment.list_bills' for t in tools):
                     if not any(c['name'] == 'bill_payment.list_bills' for c in env.get_tool_calls()):
                         bad_id_error = "The request asks to pay or transfer a utility bill amount. You MUST call bill_payment.list_bills first to discover the exact bill amount before transferring."
+
+            # Intercept ride booking if destination refers to an event and calendar was not checked
+            if not bad_id_error and call['name'] in ('ride_hailing.book', 'ride_hailing.get_quotes'):
+                user_text_low = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+                event_kws = ('đi họp', 'chỗ hẹn', 'đi khám', 'đi chơi', 'gặp khách', 'tiệc')
+                if any(k in user_text_low for k in event_kws) and not any(c['name'] == 'calendar.list_events' for c in env.get_tool_calls()):
+                    if any(t['name'] == 'calendar.list_events' for t in tools):
+                        bad_id_error = "The ride destination refers to an event/appointment. You MUST call calendar.list_events first to discover the event's location and time before booking."
 
             # Intercept ungrounded/fabricated IDs for x-ref parameters
             if not bad_id_error and call['name'] in xref_props:
@@ -241,7 +311,7 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                 result = env.call(call['name'], call['arguments'])
                 if emit:
                     emit('tool.output', input=call, output=result)
-                extract_ids(result, observed_ids, observed_phones, observed_events, observed_bills)
+                extract_ids(result, observed_ids, observed_phones, observed_events, observed_bills, observed_contacts)
                 clarification |= call['name'] == 'sys.ask_missing_info'
                 kind = kinds.get(call['name'])
                 read_executed |= kind == 'read'

@@ -45,6 +45,14 @@ CRITICAL RULES:
    - You may return multiple tool calls in a single response when they are independent (e.g. calling weather.get_forecast, calendar.list_events, or contacts.search together).
    - Wait for tool results before issuing dependent write calls that require observed IDs.
 
+7. RIDE HAILING & CALENDAR EVENT DESTINATIONS:
+   - When the user asks to book or quote a ride to an event or appointment (e.g. "đi họp...", "tới chỗ hẹn...", "đi khám..."), you MUST call calendar.list_events with {} first to discover the event's location and time!
+   - Resolve relative locations from user_profile in context:
+     - "công ty", "văn phòng", "chỗ làm" -> user_profile.work_address
+     - "nhà", "về nhà" -> user_profile.home_address
+   - When the user says "đặt xe", "đặt ngay bây giờ", "gọi ô tô", call ride_hailing.book directly! Do NOT call ride_hailing.get_quotes unless the user explicitly asks for quotes or prices.
+   - For vehicle: "bốn chỗ" / "4 chỗ" = "car4", "bảy chỗ" / "7 chỗ" = "car7", "xe máy" = "bike".
+
 Before finishing, check that every requested action has been executed. Use native tool-call format. Do not output conversational explanations.'''
 
 # Authored synthetic examples, not extracted from inspected/public/private labels.
@@ -66,11 +74,15 @@ EXAMPLES = [
       'request': 'Nạp 50k điện thoại cho bác Ba và chuyển tiền điện tháng này cho cô Mai.',
       'behavior': '<tool_call>{"name":"bill_payment.list_bills","arguments":{}}</tool_call>'
                   '<tool_call>{"name":"contacts.search","arguments":{"query":"Bác Ba"}}</tool_call>'
-                  '<tool_call>{"name":"contacts.search","arguments":{"query":"Cô giáo Mai"}}</tool_call>'}),
+                  '<tool_call>{"name":"contacts.search","arguments":{"query":"Cô Mai"}}</tool_call>'}),
     # Smart home device status check before control:
     ({'smart_home.get_status', 'smart_home.light_set'}, {
       'request': 'Giảm độ sáng đèn phòng khách xuống còn một nửa.',
       'behavior': '<tool_call>{"name":"smart_home.get_status","arguments":{}}</tool_call>'}),
+    # Ride hailing to a calendar event: discover event location and time from calendar first.
+    ({'calendar.list_events', 'ride_hailing.book'}, {
+      'request': 'Đặt giúp tôi xe bốn chỗ từ công ty đi họp phụ huynh chiều nay nhé, đặt ngay bây giờ luôn.',
+      'behavior': '<tool_call>{"name":"calendar.list_events","arguments":{}}</tool_call>'}),
     # Missing info: no content supplied — ask before doing anything.
     ({'notes.create', 'sys.ask_missing_info'}, {
       'request': 'Tạo một ghi chú giúp tôi.',

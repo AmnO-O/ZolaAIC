@@ -271,6 +271,64 @@ class PipelineTests(unittest.TestCase):
         called_names = [c['name'] for c in row['tool_calls']]
         self.assertEqual(called_names, ['calendar.update_event', 'sms.send'])
 
+    def test_ride_hailing_resolves_work_and_event_addresses(self):
+        class RideEnv(FakeEnv):
+            def call(self, name, args):
+                super().call(name, args)
+                if name == 'calendar.list_events':
+                    return {'ok': True, 'events': [{'id': 'evt_01', 'title': 'họp phụ huynh', 'location': 'Trường TH Nguyễn Bỉnh Khiêm, Quận 1'}]}
+                return {'ok': True}
+
+        env = RideEnv()
+        tools = [{'name': 'calendar.list_events', 'kind': 'read'}, {'name': 'ride_hailing.book', 'kind': 'write'}]
+        decisions = iter([
+            [{'name': 'calendar.list_events', 'arguments': {}}],
+            [{'name': 'ride_hailing.book', 'arguments': {'pickup': 'công ty', 'dropoff': 'họp phụ huynh', 'vehicle': 'car4', 'payment': 'ewallet'}}],
+            []
+        ])
+        messages = [
+            {'role': 'system', 'content': {'context': {'user_profile': {'work_address': 'Khu Công nghệ cao, TP.HCM'}}}},
+            {'role': 'user', 'content': 'Đặt xe bốn chỗ từ công ty đi họp phụ huynh'}
+        ]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        book_call = [c for c in row['tool_calls'] if c['name'] == 'ride_hailing.book'][0]
+        self.assertEqual(book_call['arguments']['pickup'], 'Khu Công nghệ cao, TP.HCM')
+        self.assertEqual(book_call['arguments']['dropoff'], 'Trường TH Nguyễn Bỉnh Khiêm, Quận 1')
+        self.assertNotIn('payment', book_call['arguments'])
+
+    def test_ride_hailing_drops_redundant_get_quotes_on_direct_booking(self):
+        env = FakeEnv()
+        tools = [{'name': 'ride_hailing.get_quotes', 'kind': 'read'}, {'name': 'ride_hailing.book', 'kind': 'write'}]
+        decisions = iter([
+            [{'name': 'ride_hailing.get_quotes', 'arguments': {'pickup': 'A', 'dropoff': 'B', 'vehicle': 'car4'}},
+             {'name': 'ride_hailing.book', 'arguments': {'pickup': 'A', 'dropoff': 'B', 'vehicle': 'car4'}}],
+            []
+        ])
+        messages = [{'role': 'user', 'content': 'Đặt ngay bây giờ giúp tôi'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(len(row['tool_calls']), 1)
+        self.assertEqual(row['tool_calls'][0]['name'], 'ride_hailing.book')
+
+    def test_transfer_contact_id_disambiguated_from_user_text(self):
+        class ContactEnv(FakeEnv):
+            def call(self, name, args):
+                super().call(name, args)
+                if name == 'contacts.search':
+                    return {'ok': True, 'contacts': [{'id': 'c_02', 'name': 'Bác Ba'}, {'id': 'c_06', 'name': 'Cô giáo Mai'}]}
+                return {'ok': True}
+
+        env = ContactEnv()
+        tools = [{'name': 'contacts.search', 'kind': 'read'}, {'name': 'ewallet.transfer', 'kind': 'write'}]
+        decisions = iter([
+            [{'name': 'contacts.search', 'arguments': {'query': 'Cô Mai'}}],
+            [{'name': 'ewallet.transfer', 'arguments': {'contact_id': 'c_02', 'amount': 100000}}],
+            []
+        ])
+        messages = [{'role': 'user', 'content': 'Chuyển ví cho cô Mai tiền điện tháng này nhé'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        transfer_call = [c for c in row['tool_calls'] if c['name'] == 'ewallet.transfer'][0]
+        self.assertEqual(transfer_call['arguments']['contact_id'], 'c_06')
+
     def test_train_labels_and_transcripts_are_removed(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / 'artifacts') as temporary:
             root = Path(temporary)
