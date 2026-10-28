@@ -162,12 +162,46 @@ class PipelineTests(unittest.TestCase):
         decisions = iter([
             [{'name': 'contacts.search', 'arguments': {'query': 'Xếp Dũng'}}],
             [{'name': 'contacts.search', 'arguments': {'query': 'xếp dựng'}}],
+            [{'name': 'contacts.search', 'arguments': {'query': 'Sếp dung'}}],
+            [{'name': 'contacts.search', 'arguments': {'query': 'cô mai'}}],
+            [{'name': 'contacts.search', 'arguments': {'query': 'bác ba'}}],
             []
         ])
         messages = [{'role': 'user', 'content': 'Nhắn xếp Dũng giờ mới'}]
         row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
         self.assertEqual(row['tool_calls'][0]['arguments']['query'], 'Sếp Dũng')
         self.assertEqual(row['tool_calls'][1]['arguments']['query'], 'Sếp Dũng')
+        self.assertEqual(row['tool_calls'][2]['arguments']['query'], 'Sếp Dũng')
+        self.assertEqual(row['tool_calls'][3]['arguments']['query'], 'Cô giáo Mai')
+        self.assertEqual(row['tool_calls'][4]['arguments']['query'], 'Bác Ba')
+
+    def test_calendar_update_event_computes_end_time_from_duration(self):
+        class CalendarEnv(FakeEnv):
+            def call(self, name, args):
+                super().call(name, args)
+                if name == 'calendar.list_events':
+                    return {'ok': True, 'events': [{'id': 'evt_01', 'start': '2026-11-29T08:00:00+07:00', 'end': '2026-11-29T09:00:00+07:00'}]}
+                return {'ok': True}
+
+        env = CalendarEnv()
+        decisions = iter([
+            [{'name': 'calendar.list_events', 'arguments': {}}],
+            [{'name': 'calendar.update_event', 'arguments': {'event_id': 'evt_01', 'start': '2026-11-29T09:00:00+07:00'}}],
+            []
+        ])
+        messages = [{'role': 'user', 'content': 'Dời chạy bộ muộn 1 tiếng'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
+        update_call = [c for c in row['tool_calls'] if c['name'] == 'calendar.update_event'][0]
+        self.assertEqual(update_call['arguments']['end'], '2026-11-29T10:00:00+07:00')
+
+    def test_fabricated_phone_number_is_rejected(self):
+        env = FakeEnv()
+        tools = [{'name': 'ewallet.topup_mobile', 'kind': 'write'}]
+        decisions = iter([[{'name': 'ewallet.topup_mobile', 'arguments': {'phone': '0901234567', 'amount': 50000}}], []])
+        messages = [{'role': 'user', 'content': 'Nạp 50k cho bác Ba'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(row['tool_calls'], [])
+        self.assertIn('validation_error', log['trace'][0]['result'])
 
     def test_multi_action_incomplete_triggers_reminder(self):
         env = FakeEnv()

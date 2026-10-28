@@ -54,11 +54,17 @@ EXAMPLES = [
     ({'calendar.list_events', 'calendar.update_event', 'contacts.search', 'sms.send'}, {
       'request': 'Dời lịch chạy bộ muộn 1 tiếng và nhắn sếp Dũng giờ mới.',
       'behavior': '<tool_call>{"name":"calendar.list_events","arguments":{}}</tool_call>'
-                  '<tool_call>{"name":"contacts.search","arguments":{"query":"sếp Dũng"}}</tool_call>'}),
+                  '<tool_call>{"name":"contacts.search","arguments":{"query":"Sếp Dũng"}}</tool_call>'}),
     # Conditional check: check condition first before taking action.
     ({'weather.get_forecast', 'calendar.cancel_event'}, {
       'request': 'Nếu mai mưa thì hủy lịch đá bóng, không mưa thì thôi.',
       'behavior': '<tool_call>{"name":"weather.get_forecast","arguments":{"date":"2035-12-01"}}</tool_call>'}),
+    # Bill payment + contact lookups before money transfer/topup.
+    ({'bill_payment.list_bills', 'contacts.search', 'ewallet.topup_mobile', 'ewallet.transfer'}, {
+      'request': 'Nạp 50k điện thoại cho bác Ba và chuyển tiền điện tháng này cho cô Mai.',
+      'behavior': '<tool_call>{"name":"bill_payment.list_bills","arguments":{}}</tool_call>'
+                  '<tool_call>{"name":"contacts.search","arguments":{"query":"Bác Ba"}}</tool_call>'
+                  '<tool_call>{"name":"contacts.search","arguments":{"query":"Cô giáo Mai"}}</tool_call>'}),
     # Missing info: no content supplied — ask before doing anything.
     ({'notes.create', 'sys.ask_missing_info'}, {
       'request': 'Tạo một ghi chú giúp tôi.',

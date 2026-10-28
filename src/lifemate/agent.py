@@ -8,16 +8,22 @@ CONTINUE_AFTER_READ = (
     'reply with no tool calls.')
 
 
-def extract_ids(obj, target_set):
-    """Recursively extract string IDs from dicts/lists into target_set."""
+def extract_ids(obj, target_set, phone_set=None, event_map=None):
+    """Recursively extract string IDs, phones, and event details into targets."""
     if isinstance(obj, dict):
         for k, v in obj.items():
             if k in ('id', 'device_id', 'contact_id', 'event_id', 'bill_id', 'scene_id', 'lock_id', 'note_id', 'order_id') and isinstance(v, str):
                 target_set.add(v)
-            extract_ids(v, target_set)
+            if k in ('phone', 'phone_number') and isinstance(v, str) and phone_set is not None:
+                phone_set.add(v)
+            if k == 'events' and isinstance(v, list) and event_map is not None:
+                for item in v:
+                    if isinstance(item, dict) and 'id' in item:
+                        event_map[item['id']] = item
+            extract_ids(v, target_set, phone_set, event_map)
     elif isinstance(obj, list):
         for item in obj:
-            extract_ids(item, target_set)
+            extract_ids(item, target_set, phone_set, event_map)
 
 
 def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
@@ -31,8 +37,10 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                 xref_props.setdefault(tool['name'], {})[prop] = prop_spec['x-ref']
 
     observed_ids = set()
+    observed_phones = set()
+    observed_events = {}
     for m in messages:
-        extract_ids(m.get('content'), observed_ids)
+        extract_ids(m.get('content'), observed_ids, observed_phones, observed_events)
 
     trace = []
     reason = 'turn_limit'
@@ -126,6 +134,19 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                     call['arguments'].pop('date_from', None)
                     call['arguments'].pop('date_to', None)
 
+            # Compute end time preserving event duration if omitted
+            if call['name'] == 'calendar.update_event' and 'start' in call.get('arguments', {}) and 'end' not in call['arguments']:
+                evt_id = call['arguments'].get('event_id')
+                if evt_id in observed_events and 'start' in observed_events[evt_id] and 'end' in observed_events[evt_id]:
+                    from datetime import datetime
+                    try:
+                        orig_s = datetime.fromisoformat(observed_events[evt_id]['start'])
+                        orig_e = datetime.fromisoformat(observed_events[evt_id]['end'])
+                        new_s = datetime.fromisoformat(call['arguments']['start'])
+                        call['arguments']['end'] = (new_s + (orig_e - orig_s)).isoformat()
+                    except Exception:
+                        pass
+
             # Normalize common Vietnamese ASR phonetic variations in contacts.search
             if call['name'] == 'contacts.search' and 'query' in call.get('arguments', {}):
                 q = str(call['arguments']['query']).strip()
@@ -134,8 +155,12 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                 elif q.lower() == 'xếp':
                     q = 'Sếp'
                 # Correct acoustic/model distortion on common Vietnamese names
-                if 'dựng' in q.lower() or 'dưng' in q.lower():
-                    q = q.replace('dựng', 'Dũng').replace('Dựng', 'Dũng').replace('dưng', 'Dũng').replace('Dưng', 'Dũng')
+                if any(w in q.lower() for w in ('dựng', 'dưng', 'dung')):
+                    q = q.replace('dựng', 'Dũng').replace('Dựng', 'Dũng').replace('dưng', 'Dũng').replace('Dưng', 'Dũng').replace('dung', 'Dũng').replace('Dung', 'Dũng')
+                if q.lower() in ('cô mai', 'cô giáo mai'):
+                    q = 'Cô giáo Mai'
+                if q.lower() in ('bác ba', 'bac ba'):
+                    q = 'Bác Ba'
                 call['arguments']['query'] = q
 
             # Intercept ungrounded/fabricated IDs for x-ref parameters
@@ -148,6 +173,13 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                         if val not in user_text:
                             bad_id_error = f"Ungrounded or fabricated ID '{val}' for parameter '{param}' (referenced from {ref}). You MUST call a lookup tool (e.g. contacts.search, calendar.list_events, smart_home.get_status) first to discover the real ID. If your task also involves sending a message or controlling items, issue all necessary lookup calls (e.g. calendar.list_events and contacts.search) now."
                             break
+
+            # Intercept ungrounded/fabricated phone numbers
+            if not bad_id_error and call['name'] in ('ewallet.topup_mobile', 'phone.call') and 'phone' in call.get('arguments', {}):
+                p_val = str(call['arguments']['phone']).strip()
+                user_text = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user')
+                if p_val not in user_text and p_val not in observed_phones:
+                    bad_id_error = f"Ungrounded or fabricated phone number '{p_val}'. The user did not specify this phone number in the request. You MUST call contacts.search to find the contact's phone number first."
 
             if bad_id_error:
                 check = {'ok': False, 'error': bad_id_error}
@@ -164,7 +196,7 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                 result = env.call(call['name'], call['arguments'])
                 if emit:
                     emit('tool.output', input=call, output=result)
-                extract_ids(result, observed_ids)
+                extract_ids(result, observed_ids, observed_phones, observed_events)
                 clarification |= call['name'] == 'sys.ask_missing_info'
                 kind = kinds.get(call['name'])
                 read_executed |= kind == 'read'
