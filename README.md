@@ -6,7 +6,9 @@ Audio and conversation history → local ASR → controlled LLM tool calls → o
 
 For Kaggle, import [notebooks/kaggle_pipeline.ipynb](notebooks/kaggle_pipeline.ipynb) and follow the [notebook instructions](notebooks/README.md). It clones this repository, prepares models, and runs on your attached dataset.
 
-The pipeline uses one bounded observe-act controller: the model may return several independent tool calls per decision, and the loop stops on an empty decision, a clarification request, six decisions, or the deadline. There is no separate planner, router, or tool shortlist; the model sees the sample's installed tool schemas.
+The pipeline uses one bounded observe-act controller: the model may return several independent tool calls per decision, and the loop stops on an empty decision, a clarification request, eight decisions, or the deadline. There is no separate planner model. Full installed schemas are the default; experimental pruning (`LIFEMATE_TOOL_PRUNING=1`) retains the full catalog for recovery.
+
+The controller preserves explicit amounts, recipients, dates, addresses, names, and lookup filters instead of guessing replacements. It grounds IDs/phone numbers from actual current or historical observations and explicit user input. Only exact profile-address aliases and unambiguous observed event locations are resolved; an omitted event end can preserve its observed duration when rescheduling. This is validation and limited normalization, not a complete semantic correctness guarantee.
 
 System behavior instructions and demonstration guidance are written in English. User requests, ASR transcripts, profile values, tool results, and catalog descriptions retain their supplied language. Tool names and schemas are preserved exactly. The language change has not been benchmarked for accuracy or speed.
 
@@ -42,6 +44,8 @@ python scripts/infer.py --split-dir /path/to/public_test --backend lifemate.back
 ```
 
 The runner refuses to overwrite an existing output. Defaults: `LIFEMATE_ASR_KIND=gipformer`, `LIFEMATE_PROMPT_MODE=steerability`, 27-second sample budget, and a 16,384-token context limit. Prompt modes `system` and `baseline` support controlled comparisons. The competition target is 30 seconds per sample; A30 timing and deployment validation are pending.
+
+Session/export failures are isolated per sample, with no retry or fabricated state hash. Later samples still run. If a real output row cannot be exported, it is omitted, marked `missing_submission_row` in the trace, and the process exits nonzero after the batch. That output is partial and must not be treated as a complete submission. Failed actual tool calls remain in the exported environment log. Attempted and successful actions are recorded separately.
 
 For development, add `--step-log result/steps.jsonl --verbose-steps` to save every query's observed processing inputs/outputs and print full step inputs/outputs live. The notebook enables this by default and provides an expandable query viewer. Full prompts, tool responses, and context remain in this separate private diagnostic file; the submission schema stays unchanged. Disable detailed logging when measuring runtime.
 

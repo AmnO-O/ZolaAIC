@@ -64,6 +64,27 @@ class RoutingTests(unittest.TestCase):
         selected = router.route('xyz 123 không rõ ràng gì cả', enabled=True)
         self.assertEqual(selected, tools)
 
+    def test_default_is_full_catalog_and_unknown_apps_are_not_pruned(self):
+        tools=[{'name':name} for name in ('sms.send','contacts.search','weather.get_forecast',
+            'calendar.list_events','new_service.act','sys.ask_missing_info')]
+        router=SafeToolRouter(tools)
+        self.assertEqual(router.route('Nhắn tin cho mẹ'),tools)
+        self.assertIn('new_service.act',{t['name'] for t in router.route('Nhắn tin cho mẹ',enabled=True)})
+
+    def test_bill_transfer_keeps_transfer_capabilities(self):
+        tools=[{'name':name} for name in ('ewallet.transfer','bill_payment.list_bills','contacts.search',
+            'weather.get_forecast','notes.create','sys.ask_missing_info')]
+        selected=SafeToolRouter(tools).route('Chuyển tiền điện cho anh Nam',enabled=True)
+        self.assertIn('ewallet.transfer',{t['name'] for t in selected})
+
+    def test_declared_dependencies_are_followed_transitively(self):
+        tools=[{'name':'sms.send','parameters':{'properties':{'target':{'x-ref':'email.messages'}}}},
+               {'name':'email.lookup','parameters':{'properties':{'place':{'x-ref':'maps.places'}}}},
+               {'name':'maps.get'},{'name':'weather.get_forecast'},
+               {'name':'calendar.list_events'},{'name':'sys.ask_missing_info'}]
+        selected=SafeToolRouter(tools).route('Nhắn tin',enabled=True)
+        self.assertIn('maps.get',{t['name'] for t in selected})
+
 
 if __name__ == '__main__':
     unittest.main()

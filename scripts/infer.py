@@ -68,6 +68,7 @@ def main():
     # Exclusive creation prevents accidental overwrite of an existing run.
     with output.open('x', encoding='utf-8') as target, output.with_suffix('.trace.jsonl').open('x', encoding='utf-8') as logs:
         count = 0
+        missing_predictions = 0
         for item in split.records():
             if selected is not None and item['id'] not in selected:
                 continue
@@ -83,10 +84,12 @@ def main():
                 detail.begin(item['id'], start)
                 detail.emit('sample.input', input=item, budget_seconds=args.budget_seconds,
                             runtime=getattr(backend,'runtime_info',{}))
-            env = split.session(item['id'])
-            if detail:
-                detail.emit('session.created', output={'sessions_created': 1})
+            env = None
+            row = None
             try:
+                env = split.session(item['id'])
+                if detail:
+                    detail.emit('session.created', output={'sessions_created': 1})
                 def transcribe_logged(relative, scope):
                     audio = split.audio_path(relative)
                     began = time.monotonic()
@@ -118,19 +121,30 @@ def main():
                 )
                 row, log = run_agent(env, backend.decide, messages, pruned_tools, deadline,
                                      emit=detail.emit if detail else None,
-                                     continue_after_read=os.environ.get('LIFEMATE_CONTINUE_AFTER_READ','1')=='1')
+                                     continue_after_read=os.environ.get('LIFEMATE_CONTINUE_AFTER_READ','1')=='1',
+                                     full_tools=tools)
             except Exception as error:
                 # Keep the same environment and every call made before failure.
-                row = {'tool_calls': env.get_tool_calls(), 'state_hash': env.get_state_hash()}
                 log = {'termination': 'error', 'error_type': type(error).__name__, 'error_message':str(error)}
+                if env is not None:
+                    try:
+                        row = {'tool_calls':env.get_tool_calls(),'state_hash':env.get_state_hash()}
+                    except Exception as export_error:
+                        log['export_error'] = str(export_error)
                 if detail:
                     detail.emit('sample.error', output=log)
             finally:
                 if reset_sample:
                     reset_sample()
-            row['id'] = item['id']
-            target.write(json.dumps(row, ensure_ascii=False) + '\n')
-            target.flush()
+            if row is not None:
+                row['id'] = item['id']
+                target.write(json.dumps(row, ensure_ascii=False) + '\n')
+                target.flush()
+            else:
+                # No real hash is available. Omit the row, diagnose the failure,
+                # continue later samples, then report a non-zero process status.
+                missing_predictions += 1
+                log['missing_submission_row'] = True
             log.update(id=item['id'], elapsed_seconds=time.monotonic()-start,budget_seconds=args.budget_seconds)
             if detail:
                 detail.emit('sample.output', output=row, termination=log['termination'])
@@ -138,6 +152,9 @@ def main():
             logs.flush()
     if detail:
         detail.close()
+    if missing_predictions:
+        raise SystemExit(f'{missing_predictions} samples could not export a real submission row; '
+                         'later samples were processed. See trace diagnostics.')
 
 
 if __name__ == '__main__':

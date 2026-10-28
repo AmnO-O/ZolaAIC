@@ -10,16 +10,16 @@ Use only currently available tools and the exact parameter names in their schema
 
 CRITICAL RULES:
 1. NEVER INVENT OR GUESS ENTITY IDs:
-   - Any parameter with an ID constraint (e.g. contact_id, event_id, device_id, bill_id, lock_id, scene_id) MUST be an actual ID observed from a previous tool result.
+   - An ID-constrained parameter must come from an actual tool result, observed historical tool results, or an explicit user identifier. Reuse known evidence; do not repeat historical actions or add unnecessary lookups.
    - NEVER fabricate placeholder IDs such as "contact_123", "evt_01", "device_1"!
-   - You CANNOT call calendar.update_event or calendar.cancel_event until you have FIRST called calendar.list_events and observed the real event_id and original time! When calling calendar.list_events, pass NO arguments (use {}) unless the user explicitly asked to filter the calendar view by date.
-   - You CANNOT control a smart device until you have FIRST called smart_home.get_status and observed the real device_id! When calling smart_home.get_status, pass NO arguments (use {}) so all devices in the home are returned.
+   - For calendar changes, use a grounded event_id. Look up unknown IDs/times with calendar.list_events; preserve filters needed by the request. When rescheduling, preserve the observed duration unless the user requests a different end time.
+   - For device control, use a grounded device_id. Look up unknown devices with smart_home.get_status, preserving requested room/type/floor filters.
    - If the request involves paying or transferring an amount equal to a bill (e.g. "tiền điện", "tiền nước", "tiền mạng", "tiền internet", "hóa đơn") without stating an exact numeric amount, you MUST call bill_payment.list_bills with {} first to discover the exact bill amount before transferring!
-   - You CANNOT call sms.send or chat_ott.send until you have FIRST called contacts.search and observed the real contact_id!
-   - If a condition (e.g. weather forecast, wallet balance) is satisfied, your immediate next step is to issue all lookup tools together to discover the real IDs before writing.
+   - For messages or transfers, preserve the intended recipient. Use observed contact data or an explicit user phone/ID; search contacts only when needed. Never select a recipient by a shared honorific alone.
+   - For a satisfied condition, obtain any missing prerequisites. Batch independent lookups, but do not read data already known from history or explicit input.
 
 2. STRICT MINIMAL ARGUMENTS:
-   - Pass ONLY arguments that are either marked `required` or EXPLICITLY requested by the user.
+   - Include required arguments, arguments needed by x-one-of constraints, and optional arguments that the request actually needs. Preserve explicit dates, amounts, recipients, addresses, filters, and corrections; do not replace them with defaults.
    - In weather tools: omit `location` if the user is asking about the weather locally or does not name a different city (as the schema states: 'bỏ trống = thành phố của người dùng').
    - In alarm tools: DO NOT add unrequested `label` or `repeat`.
    - In smart home tools: DO NOT add unrequested `floor` or `room`.
@@ -46,10 +46,10 @@ CRITICAL RULES:
    - Wait for tool results before issuing dependent write calls that require observed IDs.
 
 7. RIDE HAILING & CALENDAR EVENT DESTINATIONS:
-   - When the user asks to book or quote a ride to an event or appointment (e.g. "đi họp...", "tới chỗ hẹn...", "đi khám..."), you MUST call calendar.list_events with {} first to discover the event's location and time!
+   - If a ride destination is an unresolved event reference, obtain its location/time from calendar results or ask for clarification. Reuse historical results. An explicit destination address does not require an unrelated calendar lookup.
    - Resolve relative locations from user_profile in context:
      - "công ty", "văn phòng", "chỗ làm" -> user_profile.work_address
-     - "nhà", "về nhà" -> user_profile.home_address
+      - Exact aliases "nhà", "về nhà" -> user_profile.home_address. "Nhà hàng" and explicit venue/address strings are not home aliases. Never guess among ambiguous matching events.
    - When the user says "đặt xe", "đặt ngay bây giờ", "gọi ô tô", call ride_hailing.book directly! Do NOT call ride_hailing.get_quotes unless the user explicitly asks for quotes or prices.
    - For vehicle: "bốn chỗ" / "4 chỗ" = "car4", "bảy chỗ" / "7 chỗ" = "car7", "xe máy" = "bike".
 
@@ -67,7 +67,7 @@ EXAMPLES = [
                   '<tool_call>{"name":"contacts.search","arguments":{"query":"Sếp Dũng"}}</tool_call>'}),
     # Conditional check: check condition first before taking action.
     ({'weather.get_forecast', 'calendar.cancel_event'}, {
-      'request': 'Nếu mai mưa thì hủy lịch đá bóng, không mưa thì thôi.',
+      'request': 'Nếu ngày 2035-12-01 mưa thì hủy lịch đá bóng, không mưa thì thôi.',
       'behavior': '<tool_call>{"name":"weather.get_forecast","arguments":{"date":"2035-12-01"}}</tool_call>'}),
     # Bill payment + contact lookups before money transfer/topup.
     ({'bill_payment.list_bills', 'contacts.search', 'ewallet.topup_mobile', 'ewallet.transfer'}, {

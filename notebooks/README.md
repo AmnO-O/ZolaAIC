@@ -1,6 +1,8 @@
 # Kaggle notebook
 
-The notebook defaults to `PROMPT_MODE="system"` and the single bounded observe-act controller. It runs `scripts/infer.py` with the same defaults as the command line. Keep `PROMPT_MODE` and `BUDGET_SECONDS` fixed across comparisons.
+The notebook uses the single bounded observe-act controller, with `PROMPT_MODE="steerability"` and `TOOL_PRUNING=False`. Use `PROMPT_MODE="system"` for an ablation without demonstrations. Keep these settings and `BUDGET_SECONDS` fixed across comparisons. The checked-in `LIMIT=1` is a small debug run, not a representative benchmark.
+
+The controller preserves explicit call values and filters, reuses actual historical evidence, and distinguishes attempted from successful execution. With pruning enabled experimentally, it expands to full schemas before an empty decision can finish or when an omitted permitted tool is proposed. No additional ToolEnv is created. If session creation/export fails, other samples continue, but that row is omitted rather than given a fake hash; the process ultimately exits nonzero and the file is partial. Inspect the trace before using it.
 
 Import [kaggle_pipeline.ipynb](kaggle_pipeline.ipynb) into a new **private** Kaggle notebook using **File → Import Notebook** (or upload it when creating a notebook).
 

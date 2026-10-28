@@ -119,20 +119,19 @@ class PipelineTests(unittest.TestCase):
         # Tool result in trace should record validation error
         self.assertIn('validation_error', log['trace'][0]['result'])
 
-    def test_unrequested_weather_location_is_stripped(self):
+    def test_weather_location_is_not_silently_removed(self):
         env = FakeEnv()
         decisions = iter([[{'name': 'weather.get_forecast', 'arguments': {'date': '2026-11-29', 'location': 'Đà Nẵng'}}], []])
         # User message did NOT mention Đà Nẵng
         messages = [{'role': 'user', 'content': 'Nếu mai mưa thì thôi'}]
         row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
         self.assertEqual(len(row['tool_calls']), 1)
-        self.assertEqual(row['tool_calls'][0]['arguments'], {'date': '2026-11-29'})
-        self.assertNotIn('location', row['tool_calls'][0]['arguments'])
+        self.assertEqual(row['tool_calls'][0]['arguments'], {'date': '2026-11-29', 'location': 'Đà Nẵng'})
 
-    def test_relative_date_resolved_correctly_from_context(self):
+    def test_correct_model_relative_date_is_preserved(self):
         env = FakeEnv()
-        # Model passed wrong copied date 2026-11-29, but context is 2026-11-20
-        decisions = iter([[{'name': 'weather.get_forecast', 'arguments': {'date': '2026-11-29'}}], []])
+        # The model resolves tomorrow from the supplied context; controller preserves it.
+        decisions = iter([[{'name': 'weather.get_forecast', 'arguments': {'date': '2026-11-21'}}], []])
         messages = [
             {'role': 'system', 'content': {'context': {'current_time': '2026-11-20T15:30:00+07:00'}}},
             {'role': 'user', 'content': 'Xem giúp mai có mưa không'}
@@ -140,13 +139,13 @@ class PipelineTests(unittest.TestCase):
         row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
         self.assertEqual(row['tool_calls'][0]['arguments']['date'], '2026-11-21')
 
-    def test_unrequested_calendar_dates_are_stripped(self):
+    def test_calendar_lookup_filters_are_preserved(self):
         env = FakeEnv()
         decisions = iter([[{'name': 'calendar.list_events', 'arguments': {'date_from': '2026-11-29', 'date_to': '2026-11-29'}}], []])
         messages = [{'role': 'user', 'content': 'Nếu mai mưa thì dời chạy bộ muộn 1 tiếng'}]
         row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
         self.assertEqual(len(row['tool_calls']), 1)
-        self.assertEqual(row['tool_calls'][0]['arguments'], {})
+        self.assertEqual(row['tool_calls'][0]['arguments'], {'date_from': '2026-11-29', 'date_to': '2026-11-29'})
 
     def test_requested_calendar_dates_are_preserved(self):
         env = FakeEnv()
@@ -156,7 +155,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(row['tool_calls']), 1)
         self.assertEqual(row['tool_calls'][0]['arguments'], {'date_from': '2026-11-29', 'date_to': '2026-11-29'})
 
-    def test_contacts_search_normalizes_xep_to_sep(self):
+    def test_contacts_search_preserves_person_names_and_query(self):
         env = FakeEnv()
         tools = [{'name': 'contacts.search', 'kind': 'read'}]
         decisions = iter([
@@ -169,29 +168,29 @@ class PipelineTests(unittest.TestCase):
         ])
         messages = [{'role': 'user', 'content': 'Nhắn xếp Dũng giờ mới'}]
         row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
-        self.assertEqual(row['tool_calls'][0]['arguments']['query'], 'Sếp Dũng')
-        self.assertEqual(row['tool_calls'][1]['arguments']['query'], 'Sếp Dũng')
-        self.assertEqual(row['tool_calls'][2]['arguments']['query'], 'Sếp Dũng')
-        self.assertEqual(row['tool_calls'][3]['arguments']['query'], 'Cô Mai')
-        self.assertEqual(row['tool_calls'][4]['arguments']['query'], 'Bác Ba')
+        self.assertEqual(row['tool_calls'][0]['arguments']['query'], 'Xếp Dũng')
+        self.assertEqual(row['tool_calls'][1]['arguments']['query'], 'xếp dựng')
+        self.assertEqual(row['tool_calls'][2]['arguments']['query'], 'Sếp dung')
+        self.assertEqual(row['tool_calls'][3]['arguments']['query'], 'cô mai')
+        self.assertEqual(row['tool_calls'][4]['arguments']['query'], 'bác ba')
 
-    def test_smarthome_get_status_strips_restrictive_filters(self):
+    def test_smarthome_get_status_preserves_requested_filters(self):
         env = FakeEnv()
         tools = [{'name': 'smart_home.get_status', 'kind': 'read'}]
         decisions = iter([[{'name': 'smart_home.get_status', 'arguments': {'room': 'phòng ngủ', 'type': 'light'}}], []])
         messages = [{'role': 'user', 'content': 'Giảm độ sáng đèn phòng ngủ nhỏ xuống còn 50'}]
         row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
-        self.assertEqual(row['tool_calls'][0]['arguments'], {})
+        self.assertEqual(row['tool_calls'][0]['arguments'], {'room': 'phòng ngủ', 'type': 'light'})
 
-    def test_topup_amount_normalized_from_spoken_text(self):
+    def test_model_spoken_amount_is_preserved(self):
         env = FakeEnv()
         tools = [{'name': 'ewallet.topup_mobile', 'kind': 'write'}]
-        decisions = iter([[{'name': 'ewallet.topup_mobile', 'arguments': {'phone': '0912345678', 'amount': 100000}}], []])
+        decisions = iter([[{'name': 'ewallet.topup_mobile', 'arguments': {'phone': '0912345678', 'amount': 50000}}], []])
         messages = [{'role': 'user', 'content': 'Nạp giúp mình năm mươi ngàn tiền điện thoại 0912345678'}]
         row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
         self.assertEqual(row['tool_calls'][0]['arguments']['amount'], 50000)
 
-    def test_bill_transfer_amount_aligned_with_discovered_bills(self):
+    def test_bill_transfer_amount_from_observation_is_preserved(self):
         class BillEnv(FakeEnv):
             def call(self, name, args):
                 super().call(name, args)
@@ -203,7 +202,7 @@ class PipelineTests(unittest.TestCase):
         tools = [{'name': 'bill_payment.list_bills', 'kind': 'read'}, {'name': 'ewallet.transfer', 'kind': 'write'}]
         decisions = iter([
             [{'name': 'bill_payment.list_bills', 'arguments': {}}],
-            [{'name': 'ewallet.transfer', 'arguments': {'phone': '0912345678', 'amount': 100000, 'note': 'Tiền điện'}}],
+            [{'name': 'ewallet.transfer', 'arguments': {'phone': '0912345678', 'amount': 845000}}],
             []
         ])
         messages = [{'role': 'user', 'content': 'Chuyển tiền điện tháng này tới số 0912345678'}]
@@ -260,7 +259,7 @@ class PipelineTests(unittest.TestCase):
         # Turn 4: empty (finished)
         def mock_decide(msgs, tools, remaining):
             last_msg = msgs[-1]
-            if last_msg.get('role') == 'user' and 'updated the system/calendar' in str(last_msg.get('content', '')):
+            if last_msg.get('role') == 'user' and 'requested message/notification' in str(last_msg.get('content', '')):
                 return [{'name': 'sms.send', 'arguments': {'contact_id': 'c_08', 'content': 'done'}}]
             if len(env.get_tool_calls()) == 0:
                 return [{'name': 'calendar.update_event', 'arguments': {'event_id': 'evt_01'}}]
@@ -283,7 +282,7 @@ class PipelineTests(unittest.TestCase):
         tools = [{'name': 'calendar.list_events', 'kind': 'read'}, {'name': 'ride_hailing.book', 'kind': 'write'}]
         decisions = iter([
             [{'name': 'calendar.list_events', 'arguments': {}}],
-            [{'name': 'ride_hailing.book', 'arguments': {'pickup': 'công ty', 'dropoff': 'họp phụ huynh', 'vehicle': 'car4', 'payment': 'ewallet'}}],
+            [{'name': 'ride_hailing.book', 'arguments': {'pickup': 'công ty', 'dropoff': 'họp phụ huynh', 'vehicle': 'car4'}}],
             []
         ])
         messages = [
@@ -296,7 +295,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(book_call['arguments']['dropoff'], 'Trường TH Nguyễn Bỉnh Khiêm, Quận 1')
         self.assertNotIn('payment', book_call['arguments'])
 
-    def test_ride_hailing_drops_redundant_get_quotes_on_direct_booking(self):
+    def test_ride_hailing_preserves_requested_quote_and_booking(self):
         env = FakeEnv()
         tools = [{'name': 'ride_hailing.get_quotes', 'kind': 'read'}, {'name': 'ride_hailing.book', 'kind': 'write'}]
         decisions = iter([
@@ -304,12 +303,11 @@ class PipelineTests(unittest.TestCase):
              {'name': 'ride_hailing.book', 'arguments': {'pickup': 'A', 'dropoff': 'B', 'vehicle': 'car4'}}],
             []
         ])
-        messages = [{'role': 'user', 'content': 'Đặt ngay bây giờ giúp tôi'}]
+        messages = [{'role': 'user', 'content': 'Lấy báo giá và đặt xe giúp tôi'}]
         row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
-        self.assertEqual(len(row['tool_calls']), 1)
-        self.assertEqual(row['tool_calls'][0]['name'], 'ride_hailing.book')
+        self.assertEqual([c['name'] for c in row['tool_calls']], ['ride_hailing.get_quotes', 'ride_hailing.book'])
 
-    def test_transfer_contact_id_disambiguated_from_user_text(self):
+    def test_transfer_observed_contact_id_is_preserved(self):
         class ContactEnv(FakeEnv):
             def call(self, name, args):
                 super().call(name, args)
@@ -321,7 +319,7 @@ class PipelineTests(unittest.TestCase):
         tools = [{'name': 'contacts.search', 'kind': 'read'}, {'name': 'ewallet.transfer', 'kind': 'write'}]
         decisions = iter([
             [{'name': 'contacts.search', 'arguments': {'query': 'Cô Mai'}}],
-            [{'name': 'ewallet.transfer', 'arguments': {'contact_id': 'c_02', 'amount': 100000}}],
+            [{'name': 'ewallet.transfer', 'arguments': {'contact_id': 'c_06', 'amount': 100000}}],
             []
         ])
         messages = [{'role': 'user', 'content': 'Chuyển ví cho cô Mai tiền điện tháng này nhé'}]

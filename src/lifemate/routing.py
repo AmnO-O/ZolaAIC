@@ -1,4 +1,4 @@
-"""Safe catalog-based tool routing and context pruning."""
+"""Experimental catalog routing; callers retain full schemas for recovery."""
 import re
 import unicodedata
 
@@ -57,8 +57,8 @@ class SafeToolRouter:
             app = tool.get('app') or tool['name'].split('.')[0]
             self.groups.setdefault(app, []).append(tool)
 
-    def route(self, query_text, enabled=True):
-        """Select relevant tool schemas. Fallback safely to full list if uncertain."""
+    def route(self, query_text, enabled=False):
+        """Experimental shortlist; the caller must retain the full catalog for recovery."""
         if not enabled or len(self.groups) <= 4:
             return self.tools
 
@@ -88,6 +88,23 @@ class SafeToolRouter:
             matched.add('weather')
         if any(w in q_words for w in ('sếp', 'anh', 'chị', 'em', 'mẹ', 'bố', 'ba', 'cô', 'chú', 'bác', 'ông', 'bà', 'bạn')) and 'contacts' in self.groups:
             matched.add('contacts')
+
+        # Unrecognized apps must not disappear because a known domain matched.
+        matched.update(app for app in self.groups if app not in DOMAINS)
+        if 'bill_payment' in matched and any(word in q_words for word in ('chuyển', 'gửi')):
+            matched.update(app for app, group in self.groups.items()
+                           if any(t['name'].endswith('.transfer') for t in group))
+        # Follow declared references instead of relying only on app-name rules.
+        while True:
+            previous = set(matched)
+            for app in list(matched):
+                for tool in self.groups.get(app, []):
+                    for prop in tool.get('parameters', {}).get('properties', {}).values():
+                        ref = prop.get('x-ref')
+                        if isinstance(ref, str) and ref.split('.')[0] in self.groups:
+                            matched.add(ref.split('.')[0])
+            if matched == previous:
+                break
 
         # Always include sys.ask_missing_info
         matched.add('sys')

@@ -35,6 +35,10 @@ class Session:
 def ToolEnv(split,sample_id,root):
  if sample_id in created:raise RuntimeError('Session created twice')
  created.add(sample_id)
+ import os
+ if os.environ.get('ENV_CREATION_LOG'):
+  with open(os.environ['ENV_CREATION_LOG'],'a') as log:print(sample_id,file=log)
+ if sample_id=='broken':raise RuntimeError('synthetic session failure')
  return Session()
 ''')
             (base/'fake_backend.py').write_text('''
@@ -99,6 +103,22 @@ def create():return Backend()
             self.assertIn('sample.error',[event['stage'] for event in failure_events])
             self.assertEqual(failure_events[-1]['termination'],'error')
             self.assertEqual(failure_events[-1]['output']['tool_calls'],[])
+            original=json.loads((split/'train.jsonl').read_text())
+            (split/'train.jsonl').write_text('\n'.join(json.dumps({**original,'id':sample_id})
+                for sample_id in ('broken','good')))
+            partial_output=base/'partial.jsonl'
+            creations=base/'creations.txt'
+            partial=subprocess.run([sys.executable,'-B',str(root/'scripts/infer.py'),
+                '--split-dir',str(split),'--backend','fake_backend:create','--output',str(partial_output)],
+                env={**environment,'ENV_CREATION_LOG':str(creations)},capture_output=True,text=True,timeout=20)
+            self.assertNotEqual(partial.returncode,0)
+            self.assertEqual(creations.read_text().splitlines(),['broken','good'])
+            self.assertEqual([json.loads(line)['id'] for line in partial_output.read_text().splitlines()],['good'])
+            partial_trace=[json.loads(line) for line in partial_output.with_suffix('.trace.jsonl').read_text().splitlines()]
+            self.assertTrue(partial_trace[0]['missing_submission_row'])
+            self.assertEqual(partial_trace[0]['error_type'],'RuntimeError')
+            self.assertEqual(partial_trace[1]['termination'],'finished')
+            self.assertEqual(len((base/'resets.txt').read_text().splitlines()),8)
 
 
 if __name__=='__main__':unittest.main()
