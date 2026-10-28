@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from lifemate.agent import run_agent
 from lifemate.input_adapter import SplitInput
 from lifemate.step_log import StepLog
+from lifemate.adaptive import run_adaptive
 
 
 def main():
@@ -25,6 +26,11 @@ def main():
     parser.add_argument('--output', default='result/submission.jsonl')
     parser.add_argument('--ids', help='JSON array of sample IDs, or train split manifest')
     parser.add_argument('--limit', type=int)
+    parser.add_argument('--agent-mode', choices=['legacy','adaptive'], default='legacy')
+    parser.add_argument('--planning', choices=['off','auto','always'], default='auto')
+    parser.add_argument('--tool-selection', choices=['all','shortlist'], default='shortlist')
+    parser.add_argument('--planner-budget-seconds', type=float, default=4.0)
+    parser.add_argument('--planner-max-tokens', type=int, default=128)
     parser.add_argument('--step-log', help='Optional detailed development JSONL trace, separate from submission')
     parser.add_argument('--verbose-steps', action='store_true', help='Print full step inputs/outputs live; requires --step-log')
     parser.add_argument('--train-transcripts', action='store_true', help='Development only: use train reference transcripts instead of ASR')
@@ -35,6 +41,8 @@ def main():
         parser.error('--budget-seconds must be a positive finite number')
     if args.verbose_steps and not args.step_log:
         parser.error('--verbose-steps requires --step-log')
+    if not math.isfinite(args.planner_budget_seconds) or args.planner_budget_seconds<=0 or not 1<=args.planner_max_tokens<=256:
+        parser.error('Planner budget must be positive/finite; max tokens must be 1–256')
     detail = None
     if args.step_log:
         step_path = Path(args.step_log)
@@ -79,7 +87,8 @@ def main():
             deadline = start + args.budget_seconds
             if detail:
                 detail.begin(item['id'], start)
-                detail.emit('sample.input', input=item, budget_seconds=args.budget_seconds)
+                detail.emit('sample.input', input=item, budget_seconds=args.budget_seconds,
+                            agent_mode=args.agent_mode, runtime=getattr(backend,'runtime_info',{}))
             env = split.session(item['id'])
             if detail:
                 detail.emit('session.created', output={'sessions_created': 1})
@@ -105,8 +114,14 @@ def main():
                         messages.append(turn)
                 text = transcribe_logged(item['audio'], 'latest')
                 messages.append({'role': 'user', 'content': text})
-                row, log = run_agent(env, backend.decide, messages, split.tools(item), deadline,
-                                     emit=detail.emit if detail else None)
+                if args.agent_mode=='adaptive':
+                    row, log = run_adaptive(env,backend,messages,split.tools(item),deadline,
+                        planning=args.planning,selection=args.tool_selection,
+                        planner_seconds=args.planner_budget_seconds,planner_tokens=args.planner_max_tokens,
+                        emit=detail.emit if detail else None)
+                else:
+                    row, log = run_agent(env, backend.decide, messages, split.tools(item), deadline,
+                                         emit=detail.emit if detail else None)
             except Exception as error:
                 # Keep the same environment and every call made before failure.
                 row = {'tool_calls': env.get_tool_calls(), 'state_hash': env.get_state_hash()}

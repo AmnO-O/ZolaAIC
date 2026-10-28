@@ -2,6 +2,8 @@
 
 Updated: 28 October 2026. This documents implemented behavior, not the proposed final architecture.
 
+The diagram and loop description below cover the original `legacy` controller. An optional `adaptive` controller now adds catalog-based tool routing, bounded same-model planning, per-sample evidence/action tracking, reference-ID checks, and explicit completion. The Kaggle notebook exposes both controllers and starts adaptive mode with planning off. See [ADAPTIVE_AGENT.md](ADAPTIVE_AGENT.md) for the implemented experimental flow and its limitations; no GPU accuracy/runtime gain is claimed yet.
+
 ```mermaid
 flowchart TD
     A[Split JSONL and tool catalog] --> B[Select sample and installed tools]
@@ -36,7 +38,7 @@ flowchart TD
 
 Both models use local assets. Gipformer uses sherpa-onnx 2.0.1 CPU INT8 with four threads and explicit greedy search; Qwen uses FP16 on GPU 0. Model revisions are pinned in `configs/baseline.json`. The LLM parameter count is measured from loaded parameters; the ASR count is read from its pinned publisher configuration and still needs an independent final audit. Development notebooks download assets before inference starts; a network-disabled final container is still to be tested.
 
-There is one LLM agent, without a separate planner, critic, embedding model, or retrieval model. No fine-tuning has been applied.
+There is one LLM model. Adaptive mode can use that same model for a bounded planning call; there is no separate planner model, critic model, embedding model, or retrieval model. No fine-tuning has been applied.
 
 ## 2. Inputs and app access
 
@@ -98,4 +100,4 @@ Current experiments use the same 12 inspected train development samples. Public 
 | Dataset-backed Kaggle experiment | `scripts/build_live_evaluation.py` |
 | Result aggregation | `scripts/summarize_live.py` |
 
-Historical baseline reports remain in the original development workspace. Gipformer, prompt controls, and within-sample cross-decision cache reuse are implemented. The user's 300-sample ASR comparison motivated the ASR selection; it has not been reproduced by this implementation pass. Local smoke tests establish runtime wiring, not a new task accuracy score. Evidence-ledger guards, prompt optimization/GEPA, and fine-tuning remain unimplemented.
+Historical baseline reports remain in the original development workspace. Gipformer, prompt controls, within-sample cross-decision cache reuse, and the optional adaptive controller are implemented. The user's 300-sample ASR comparison motivated the ASR selection; it has not been reproduced by this implementation pass. Local smoke tests establish runtime wiring, not a new task accuracy score. Full semantic verification, lossy context compaction, prompt optimization/GEPA, and fine-tuning remain unimplemented.

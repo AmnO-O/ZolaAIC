@@ -48,7 +48,20 @@ class PromptCacheTests(unittest.TestCase):
                             pad_token_id=0, bos_token_id=1)
         config._attn_implementation = 'eager'
         model = Qwen3ForCausalLM(config).eval()
-        holder = PromptCache()
+        from lifemate.backend import LocalBackend
+        class Tokenizer:
+            eos_token_id=0
+            ids=[]
+            def apply_chat_template(self,*args,**kwargs):
+                tensor=torch.tensor([self.ids])
+                return {'input_ids':tensor,'attention_mask':torch.ones_like(tensor)}
+            def decode(self,tokens,**kwargs):return ','.join(map(str,tokens.tolist()))
+        backend=LocalBackend.__new__(LocalBackend)
+        backend.torch,backend.device,backend.model=torch,'cpu',model
+        backend.tokenizer=Tokenizer()
+        backend.prompt_cache=PromptCache()
+        backend.reuse_prompt_cache=True
+        backend.stats=[]
         prompts = [[1, 5, 8, 9, 10], [1, 5, 8, 9, 10, 11, 12],
                    [1, 5, 8, 20, 21], [1, 5]]
         hits = []
@@ -56,19 +69,12 @@ class PromptCacheTests(unittest.TestCase):
             for ids in prompts:
                 tensor = torch.tensor([ids])
                 mask = torch.ones_like(tensor)
-                cache, reused = holder.take(ids)
-                hits.append(reused)
-                for offset in range(reused, len(ids)-1, 2):
-                    stop = min(offset+2, len(ids)-1)
-                    cache = model(input_ids=tensor[:, offset:stop], attention_mask=mask[:, :stop],
-                                  past_key_values=cache, use_cache=True).past_key_values
-                reused_output = model.generate(input_ids=tensor, attention_mask=mask,
-                    past_key_values=cache, max_new_tokens=3, do_sample=False,
-                    return_dict_in_generate=True, pad_token_id=0)
+                backend.tokenizer.ids=ids
+                reused_output=backend._generate([],[],30,max_tokens=3,controls=False)
+                hits.append(backend.stats[-1]['cached_tokens'])
                 fresh_output = model.generate(input_ids=tensor, attention_mask=mask,
                     max_new_tokens=3, do_sample=False, pad_token_id=0)
-                self.assertTrue(torch.equal(reused_output.sequences, fresh_output))
-                holder.store(reused_output.past_key_values, ids[:-1])
+                self.assertEqual(reused_output,backend.tokenizer.decode(fresh_output[0,len(ids):]))
         self.assertEqual(hits, [0, 4, 3, 1])
 
 

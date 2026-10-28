@@ -6,6 +6,8 @@ Audio and conversation history → local ASR → controlled LLM tool calls → o
 
 For Kaggle, import [notebooks/kaggle_pipeline.ipynb](notebooks/kaggle_pipeline.ipynb) and follow the [notebook instructions](notebooks/README.md). It clones this repository, prepares models, and runs on your attached dataset.
 
+The notebook now includes the [adaptive agent experiment](ADAPTIVE_AGENT.md): catalog-based tool selection with recovery, optional bounded planning, observed-ID checks, action tracking, and explicit completion. It defaults to system-only prompting and planning off so the changes can be compared independently. The command-line default remains the legacy controller.
+
 ## Setup
 
 Use Python 3.11+ and a CUDA-capable environment for the LLM:

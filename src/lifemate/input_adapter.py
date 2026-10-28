@@ -31,7 +31,8 @@ class SplitInput:
     def tools(self, item):
         allowed = {name for app in item['context']['installed_apps'].values()
                    for name in app['tools']} | {'sys.ask_missing_info'}
-        return [tool for app in self.catalog['apps'] for tool in app['tools']
+        return [dict(tool, _app_description=app.get('name_vi','')+' '+app.get('description',''))
+                for app in self.catalog['apps'] for tool in app['tools']
                 if tool['name'] in allowed]
 
     def audio_path(self, relative):

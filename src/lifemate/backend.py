@@ -89,11 +89,36 @@ class LocalBackend:
         from .prompt_cache import PromptCache
         self.prompt_cache = PromptCache()
         self.reuse_prompt_cache = os.environ.get('LIFEMATE_PROMPT_CACHE', '1') == '1'
+        import transformers
+        self.runtime_info = {'torch':torch.__version__,'transformers':transformers.__version__,
+            'cuda':torch.version.cuda,'device':str(next(self.model.parameters()).device),
+            'dtype':str(next(self.model.parameters()).dtype),
+            'configured_attention':self.model.config._attn_implementation,
+            'deterministic_algorithms':torch.are_deterministic_algorithms_enabled()}
+        if str(device).startswith('cuda'):
+            self.runtime_info['gpu'] = torch.cuda.get_device_name(device)
 
     def reset_sample(self):
         self.prompt_cache.reset()
 
     def decide(self, messages, tools, remaining_seconds):
+        return parse_calls(self._generate(messages, tools, remaining_seconds))
+
+    def plan(self, messages, inventory, remaining_seconds, max_tokens=128):
+        from .adaptive import PLAN_INSTRUCTION
+        turns = chat_messages(messages)
+        context = turns[0]['content'] if turns and turns[0]['role'] == 'system' else ''
+        conversation = turns[1:] if turns and turns[0]['role'] == 'system' else turns
+        planning = [{'role': 'system', 'content': PLAN_INSTRUCTION + '\nContext: ' + context
+                     + '\nInstalled inventory: ' + json.dumps(inventory, ensure_ascii=False)}] + conversation
+        self.prompt_cache.reset()
+        try:
+            return json.loads(self._generate(planning, [], remaining_seconds,
+                              max_tokens=max_tokens, controls=False, phase='planner'))
+        finally:
+            self.prompt_cache.reset()
+
+    def _generate(self, messages, tools, remaining_seconds, max_tokens=384, controls=True, phase='llm'):
         if remaining_seconds <= 0:
             raise TimeoutError('No generation budget')
         from transformers import StoppingCriteria, StoppingCriteriaList
@@ -106,24 +131,24 @@ class LocalBackend:
         native_tools = [{'type': 'function', 'function': {
             'name': t['name'], 'description': t.get('description', ''),
             'parameters': t['parameters']}} for t in tools]
-        turns = self.prompt_controls.apply(chat_messages(messages),tools)
+        turns = self.prompt_controls.apply(chat_messages(messages),tools) if controls else messages
         encoded = self.tokenizer.apply_chat_template(
             turns, tools=native_tools, add_generation_prompt=True,
             tokenize=True, return_tensors='pt', return_dict=True)
         tokens = encoded['input_ids'].shape[-1]
         token_ids = encoded['input_ids'][0].tolist()
-        budget = min(384, 16384-tokens)
+        budget = min(max_tokens, 16384-tokens)
         if budget <= 0:
             raise ValueError('Context exceeds 16K; refusing silent truncation')
         emit = getattr(self, 'trace_event', None)
         if emit:
-            emit('llm.input', input={'messages': turns, 'tools': native_tools,
+            emit(phase + '.input', input={'messages': turns, 'tools': native_tools,
                  'rendered_prompt': self.tokenizer.decode(encoded['input_ids'][0], skip_special_tokens=False)},
                  input_tokens=tokens, max_new_tokens=budget)
         encoded = {k: v.to(self.device) for k, v in encoded.items()}
         cache, reused = self.prompt_cache.take(token_ids) if self.reuse_prompt_cache else (None, 0)
         if emit:
-            emit('llm.cache', input_tokens=tokens, cached_tokens=reused,
+            emit(phase + '.cache', input_tokens=tokens, cached_tokens=reused,
                  prefill_tokens=tokens-1-reused, fresh_tokens=tokens-reused,
                  enabled=self.reuse_prompt_cache)
         prefill_started = time.monotonic()
@@ -158,17 +183,16 @@ class LocalBackend:
         generation_seconds = time.monotonic() - generation_started
         text = self.tokenizer.decode(sequences[0, tokens:], skip_special_tokens=True)
         if emit:
-            emit('llm.output', output=text, output_tokens=sequences.shape[-1]-tokens,
+            emit(phase + '.output', output=text, output_tokens=sequences.shape[-1]-tokens,
                  cached_tokens=reused, prefill_seconds=prefill_seconds, generation_seconds=generation_seconds)
         self.stats.append({'input_tokens': tokens, 'output_tokens': sequences.shape[-1]-tokens,
                           'cached_tokens': reused, 'prefill_seconds': prefill_seconds,
                           'generation_seconds': generation_seconds})
         if time.monotonic() >= end:
             raise TimeoutError('Model generation deadline reached')
-        calls = parse_calls(text)
         if self.reuse_prompt_cache:
             self.prompt_cache.store(generated.past_key_values, token_ids[:-1])
-        return calls
+        return text
 
     def transcribe(self, path, remaining_seconds):
         if self.asr is None:
