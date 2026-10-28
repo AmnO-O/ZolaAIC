@@ -1,0 +1,25 @@
+{
+  "llm": {
+    "id": "Qwen/Qwen3-4B-Instruct-2507",
+    "revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+    "license": "Apache-2.0",
+    "commit_date": "2025-09-17",
+    "max_context_tokens": 16384,
+    "max_new_tokens": 384
+  },
+  "asr": {
+    "id": "g-group-ai-lab/gipformer1.5-68M-rnnt",
+    "revision": "dd9227dcd8705c13f33bdbe59728d546ab94480f",
+    "license": "MIT",
+    "commit_date": "2026-09-17",
+    "kind": "gipformer",
+    "parameters_source": "publisher config.json",
+    "precision": "int8",
+    "num_threads": 4,
+    "files": ["config.json", "tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx"]
+  },
+  "prompt_mode": "steerability",
+  "seed": 42,
+  "sample_budget_seconds": 27,
+  "status": "Gipformer and frozen message-level prompt controls; deployment validation pending"
+}

@@ -1,0 +1,7 @@
+# Isolated CPU ASR validation environment; no PyTorch or LLM weights required.
+sherpa-onnx==2.0.1
+sherpa-onnx-core==2.0.1
+numpy==2.1.3
+soundfile==0.13.1
+scipy==1.15.3
+huggingface-hub==0.36.0

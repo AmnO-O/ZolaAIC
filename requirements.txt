@@ -1,0 +1,11 @@
+# Baseline versions present in the successful Kaggle hardware diagnostic.
+# Resolve and freeze the complete transitive environment before final submission.
+torch==2.11.0
+transformers==5.16.1
+numpy==2.1.3
+accelerate==1.14.0
+soundfile
+scipy
+huggingface_hub
+sherpa-onnx==2.0.1
+sherpa-onnx-core==2.0.1
