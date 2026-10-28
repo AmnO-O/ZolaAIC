@@ -2,8 +2,13 @@
 import time
 
 
-def run_agent(env, decide, messages, tools, deadline, max_turns=12, emit=None):
+def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None):
     """decide(messages, tools, remaining_seconds) returns calls or [] to finish.
+
+    Each decision may batch independent calls; newly returned IDs are only
+    available on the next decision. The loop is capped at max_turns decisions
+    (gold trajectories use at most six calls, and the sample deadline usually
+    binds first).
 
     Backend must enforce its own timeout and 16K token limit. This controller
     cannot interrupt a blocking backend. No session reset or hidden-state reads.

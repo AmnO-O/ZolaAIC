@@ -104,20 +104,6 @@ class LocalBackend:
     def decide(self, messages, tools, remaining_seconds):
         return parse_calls(self._generate(messages, tools, remaining_seconds))
 
-    def plan(self, messages, inventory, remaining_seconds, max_tokens=128):
-        from .adaptive import PLAN_INSTRUCTION
-        turns = chat_messages(messages)
-        context = turns[0]['content'] if turns and turns[0]['role'] == 'system' else ''
-        conversation = turns[1:] if turns and turns[0]['role'] == 'system' else turns
-        planning = [{'role': 'system', 'content': PLAN_INSTRUCTION + '\nContext: ' + context
-                     + '\nInstalled inventory: ' + json.dumps(inventory, ensure_ascii=False)}] + conversation
-        self.prompt_cache.reset()
-        try:
-            return json.loads(self._generate(planning, [], remaining_seconds,
-                              max_tokens=max_tokens, controls=False, phase='planner'))
-        finally:
-            self.prompt_cache.reset()
-
     def _generate(self, messages, tools, remaining_seconds, max_tokens=384, controls=True, phase='llm'):
         if remaining_seconds <= 0:
             raise TimeoutError('No generation budget')

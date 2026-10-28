@@ -6,9 +6,9 @@ Audio and conversation history → local ASR → controlled LLM tool calls → o
 
 For Kaggle, import [notebooks/kaggle_pipeline.ipynb](notebooks/kaggle_pipeline.ipynb) and follow the [notebook instructions](notebooks/README.md). It clones this repository, prepares models, and runs on your attached dataset.
 
-The notebook now includes the [adaptive agent experiment](ADAPTIVE_AGENT.md): catalog-based tool selection with recovery, optional bounded planning, observed-ID checks, action tracking, and explicit completion. It defaults to system-only prompting and planning off so the changes can be compared independently. The command-line default remains the legacy controller.
+The pipeline uses one bounded observe-act controller: the model may return several independent tool calls per decision, and the loop stops on an empty decision, a clarification request, six decisions, or the deadline. There is no separate planner, router, or tool shortlist; the model sees the sample's installed tool schemas.
 
-System behavior instructions, planner/controller instructions, and demonstration guidance are written in English. User requests, ASR transcripts, profile values, tool results, and catalog descriptions retain their supplied language. Tool names and schemas are preserved exactly. The language change has not been benchmarked for accuracy or speed.
+System behavior instructions and demonstration guidance are written in English. User requests, ASR transcripts, profile values, tool results, and catalog descriptions retain their supplied language. Tool names and schemas are preserved exactly. The language change has not been benchmarked for accuracy or speed.
 
 ## Setup
 

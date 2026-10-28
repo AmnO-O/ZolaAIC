@@ -1,8 +1,6 @@
 # Kaggle notebook
 
-The updated notebook defaults to `AGENT_MODE="adaptive"`, `PROMPT_MODE="system"`, `TOOL_SELECTION="shortlist"`, and `PLANNING="off"`. After measuring this baseline, set `PLANNING="auto"` to test a short plan for conditional/sequential requests. `"always"` attempts planning whenever enough time remains. Planning consumes the same sample budget and falls back to direct execution on invalid output or timeout. See [ADAPTIVE_AGENT.md](../ADAPTIVE_AGENT.md) for behavior and limitations.
-
-For the previous controller, set `AGENT_MODE="legacy"`; routing/planning options are then ignored. `TOOL_SELECTION="all"` isolates controller changes from tool routing. Keep `PROMPT_MODE` fixed across comparisons.
+The notebook defaults to `PROMPT_MODE="system"` and the single bounded observe-act controller. It runs `scripts/infer.py` with the same defaults as the command line. Keep `PROMPT_MODE` and `BUDGET_SECONDS` fixed across comparisons.
 
 Import [kaggle_pipeline.ipynb](kaggle_pipeline.ipynb) into a new **private** Kaggle notebook using **File → Import Notebook** (or upload it when creating a notebook).
 

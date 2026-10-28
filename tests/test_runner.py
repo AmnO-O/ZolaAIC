@@ -49,7 +49,7 @@ class Backend:
   assert 'REFERENCE_MUST_NOT_LEAK' not in str(messages)
   assert 'LABEL_MUST_NOT_LEAK' not in str(messages)
   if any(m['role']=='tool' for m in messages):
-   return [{'name':'agent.finish','arguments':{'status':'done','evidence':[]}}] if os.environ.get('ADAPTIVE_TEST')=='1' else []
+   return []
   return [{'name':'memo.create','arguments':{'text':'invented memo'}}]
 def create():return Backend()
 ''')
@@ -99,15 +99,6 @@ def create():return Backend()
             self.assertIn('sample.error',[event['stage'] for event in failure_events])
             self.assertEqual(failure_events[-1]['termination'],'error')
             self.assertEqual(failure_events[-1]['output']['tool_calls'],[])
-            adaptive_output=base/'adaptive.jsonl'
-            adaptive=subprocess.run([sys.executable,'-B',str(root/'scripts/infer.py'),
-                '--split-dir',str(split),'--backend','fake_backend:create','--output',str(adaptive_output),
-                '--agent-mode','adaptive','--planning','off'],env={**environment,'ADAPTIVE_TEST':'1'},
-                capture_output=True,text=True,timeout=20)
-            self.assertEqual(adaptive.returncode,0,adaptive.stderr)
-            self.assertEqual(json.loads(adaptive_output.read_text())['tool_calls'],row['tool_calls'])
-            self.assertEqual(json.loads(adaptive_output.with_suffix('.trace.jsonl').read_text())['termination'],'done')
-            self.assertEqual(len((base/'resets.txt').read_text().splitlines()),6)
 
 
 if __name__=='__main__':unittest.main()

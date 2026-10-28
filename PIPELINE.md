@@ -2,7 +2,7 @@
 
 Updated: 28 October 2026. This documents implemented behavior, not the proposed final architecture.
 
-The diagram and loop description below cover the original `legacy` controller. An optional `adaptive` controller now adds catalog-based tool routing, bounded same-model planning, per-sample evidence/action tracking, reference-ID checks, and explicit completion. The Kaggle notebook exposes both controllers and starts adaptive mode with planning off. See [ADAPTIVE_AGENT.md](ADAPTIVE_AGENT.md) for the implemented experimental flow and its limitations; no GPU accuracy/runtime gain is claimed yet.
+The pipeline has one controller: a bounded observe-act loop that may return several independent tool calls per model decision and stops on an empty decision, a clarification, the turn limit, or the deadline.
 
 ```mermaid
 flowchart TD
@@ -38,7 +38,7 @@ flowchart TD
 
 Both models use local assets. Gipformer uses sherpa-onnx 2.0.1 CPU INT8 with four threads and explicit greedy search; Qwen uses FP16 on GPU 0. Model revisions are pinned in `configs/baseline.json`. The LLM parameter count is measured from loaded parameters; the ASR count is read from its pinned publisher configuration and still needs an independent final audit. Development notebooks download assets before inference starts; a network-disabled final container is still to be tested.
 
-There is one LLM model. Adaptive mode can use that same model for a bounded planning call; there is no separate planner model, critic model, embedding model, or retrieval model. No fine-tuning has been applied.
+There is one LLM model and no separate planner, critic, embedding, or retrieval model. No fine-tuning has been applied.
 
 ## 2. Inputs and app access
 
@@ -67,7 +67,7 @@ Each decision generates at most 384 new tokens. Prompt prefill runs in 256-token
 
 Proposed calls are parsed and checked with `env.validate()`. Invalid calls are returned to the model without execution. Valid calls execute sequentially with `env.call()`, and their actual results enter the next model turn. Clarification stops the remaining batch immediately. Unbalanced/truncated tool-call tags raise an error rather than silently dropping an unfinished call. Execution preserves dependencies between reads and writes.
 
-The loop ends on a no-call response, a clarification call, the sample deadline, an error, or 12 model decisions. Models must resolve entities from observed results and dates from sample context, but these remain instructions rather than guaranteed correct behavior.
+The loop ends on a no-call response, a clarification call, the sample deadline, an error, or six model decisions. Each decision may contain several independent calls; newly observed IDs are only usable in the next decision.
 
 ## 5. Budgets
 
@@ -100,4 +100,4 @@ Current experiments use the same 12 inspected train development samples. Public 
 | Dataset-backed Kaggle experiment | `scripts/build_live_evaluation.py` |
 | Result aggregation | `scripts/summarize_live.py` |
 
-Historical baseline reports remain in the original development workspace. Gipformer, prompt controls, within-sample cross-decision cache reuse, and the optional adaptive controller are implemented. The user's 300-sample ASR comparison motivated the ASR selection; it has not been reproduced by this implementation pass. Local smoke tests establish runtime wiring, not a new task accuracy score. Full semantic verification, lossy context compaction, prompt optimization/GEPA, and fine-tuning remain unimplemented.
+Historical baseline reports remain in the original development workspace. Gipformer, prompt controls, within-sample cross-decision cache reuse, and the bounded observe-act controller are implemented. The user's 300-sample ASR comparison motivated the ASR selection; it has not been reproduced by this implementation pass. Local smoke tests establish runtime wiring, not a new task accuracy score. Full semantic verification, lossy context compaction, prompt optimization/GEPA, and fine-tuning remain unimplemented.
