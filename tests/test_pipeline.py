@@ -148,10 +148,15 @@ class PipelineTests(unittest.TestCase):
     def test_contacts_search_normalizes_xep_to_sep(self):
         env = FakeEnv()
         tools = [{'name': 'contacts.search', 'kind': 'read'}]
-        decisions = iter([[{'name': 'contacts.search', 'arguments': {'query': 'Xếp Dũng'}}], []])
+        decisions = iter([
+            [{'name': 'contacts.search', 'arguments': {'query': 'Xếp Dũng'}}],
+            [{'name': 'contacts.search', 'arguments': {'query': 'xếp dựng'}}],
+            []
+        ])
         messages = [{'role': 'user', 'content': 'Nhắn xếp Dũng giờ mới'}]
         row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
         self.assertEqual(row['tool_calls'][0]['arguments']['query'], 'Sếp Dũng')
+        self.assertEqual(row['tool_calls'][1]['arguments']['query'], 'Sếp Dũng')
 
     def test_multi_action_incomplete_triggers_reminder(self):
         env = FakeEnv()

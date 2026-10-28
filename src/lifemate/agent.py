@@ -20,7 +20,7 @@ def extract_ids(obj, target_set):
             extract_ids(item, target_set)
 
 
-def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None,
+def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
               continue_after_read=True):
     """decide(messages, tools, remaining_seconds) returns calls or [] to finish."""
     kinds = {tool['name']: tool.get('kind') for tool in tools}
@@ -103,9 +103,13 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None,
             if call['name'] == 'contacts.search' and 'query' in call.get('arguments', {}):
                 q = str(call['arguments']['query']).strip()
                 if q.lower().startswith('xếp '):
-                    call['arguments']['query'] = 'Sếp ' + q[4:]
+                    q = 'Sếp ' + q[4:]
                 elif q.lower() == 'xếp':
-                    call['arguments']['query'] = 'Sếp'
+                    q = 'Sếp'
+                # Correct acoustic/model distortion on common Vietnamese names
+                if 'dựng' in q.lower() or 'dưng' in q.lower():
+                    q = q.replace('dựng', 'Dũng').replace('Dựng', 'Dũng').replace('dưng', 'Dũng').replace('Dưng', 'Dũng')
+                call['arguments']['query'] = q
 
             # Intercept ungrounded/fabricated IDs for x-ref parameters
             bad_id_error = None
@@ -115,7 +119,7 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None,
                     if isinstance(val, str) and val not in observed_ids:
                         user_text = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user')
                         if val not in user_text:
-                            bad_id_error = f"Ungrounded or fabricated ID '{val}' for parameter '{param}' (referenced from {ref}). You MUST call a lookup tool (e.g. contacts.search, calendar.list_events, smart_home.get_status) first to discover the real ID."
+                            bad_id_error = f"Ungrounded or fabricated ID '{val}' for parameter '{param}' (referenced from {ref}). You MUST call a lookup tool (e.g. contacts.search, calendar.list_events, smart_home.get_status) first to discover the real ID. If your task also involves sending a message or controlling items, issue all necessary lookup calls (e.g. calendar.list_events and contacts.search) now."
                             break
 
             if bad_id_error:
