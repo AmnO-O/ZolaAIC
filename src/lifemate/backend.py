@@ -52,14 +52,19 @@ class LocalBackend:
         np.random.seed(42)
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        torch.use_deterministic_algorithms(True)
+        # Deterministic algorithms are the default. The two diagnostic settings
+        # below exist only to measure how much latency the guarantee costs on
+        # the deployment device; they are not a recommended submission mode.
+        deterministic = os.environ.get('LIFEMATE_DETERMINISTIC', '1') == '1'
+        if deterministic:
+            torch.use_deterministic_algorithms(True)
         torch.backends.cudnn.benchmark = False
         torch.backends.cuda.matmul.allow_tf32 = False
         self.torch, self.device = torch, device
         self.tokenizer = AutoTokenizer.from_pretrained(llm_path, local_files_only=True)
         self.model = AutoModelForCausalLM.from_pretrained(
             llm_path, local_files_only=True, torch_dtype=torch.float16,
-            attn_implementation='sdpa').to(device).eval()
+            attn_implementation=os.environ.get('LIFEMATE_ATTN', 'sdpa')).to(device).eval()
         self.tokenizer.model_max_length = 16384
         self.model.config.max_position_embeddings = 16384
         self.llm_parameters = sum(p.numel() for p in self.model.parameters())

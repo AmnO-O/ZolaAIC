@@ -16,3 +16,4 @@ artifacts/*
 access_token
 kaggle.json
 .DS_Store
+*.jsonl

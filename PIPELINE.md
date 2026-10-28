@@ -12,7 +12,8 @@ flowchart TD
     D --> E[Gipformer 1.5 CPU ONNX ASR]
     E --> F[Conversation + sample time/location/profile]
     A --> F
-    F --> P[Steerability SystemPrompt + fixed FewShot]
+    F --> R[SafeToolRouter: prune to relevant app schemas]
+    R --> P[Steerability SystemPrompt + fixed FewShot]
     P --> G[Qwen3-4B-Instruct-2507]
     G --> H{Next tool calls?}
     H -->|No| L[Finish]
@@ -59,9 +60,17 @@ The conversation combines:
 
 The text-only experiment bypasses ASR using train reference transcripts. It is an ablation for development, not the final submission path, and rejects non-train splits.
 
+## 3b. Tool routing (SafeToolRouter)
+
+After ASR, all transcribed user turns are concatenated into a query string. `SafeToolRouter` matches this against a hand-authored Vietnamese keyword map (27 app domains) to select the relevant installed apps. It automatically expands dependencies: selecting `sms` or `chat_ott` also pulls in `contacts`; detecting weather words adds `weather`. When the query matches nothing or fewer than four apps are installed, it falls back to the full installed set. `sys.ask_missing_info` is always retained.
+
+Token savings: average 50-tool prompt (~7,000 characters) reduces to the tools of ~3 matched apps (~1,200 characters). Set `LIFEMATE_TOOL_PRUNING=0` to disable. The `context.installed_apps` field in the system message is also simplified to a list of app names, removing the nested tool-name arrays that duplicate the schema block.
+
 ## 4. LLM and execution loop
 
 After conversation normalization, the real Steerability SystemPrompt control prepends the fixed instruction, preserving the existing sample context. FewShot appends at most two authored synthetic positive examples whose required tool names are available in that sample. Example order is fixed across decisions and no example selection model is loaded. The input adapters operate at message level; the existing native Qwen tool template and all allowed schemas remain intact. There is no tool retrieval or context summarizer. Prompt tokens plus generation are capped at 16,384; oversized prompts are rejected rather than silently truncated.
+
+The system prompt explicitly instructs the model to **batch independent tool calls in one response** — for example, two reads whose results do not depend on each other. Analysis of gold trajectories shows 74.1 % of samples with both reads and writes have all reads before any write; batching those reduces the expected LLM decision count from 2.29 to 1.79 (~10 s saved). When the model returns only reads and then finishes without issuing the required write, the controller appends one short reminder and allows one more decision (`LIFEMATE_CONTINUE_AFTER_READ`).
 
 Each decision generates at most 384 new tokens. Prompt prefill runs in 256-token query chunks to bound deterministic-attention memory on T4. The backend now reuses the exact matching token prefix between decisions within one sample. Generated tokens are removed before retaining the cache because controller/template serialization can change them. Diverging prefixes are cropped to their shared tokens or recomputed; at least the last prompt token is processed to obtain fresh logits. The runner resets the cache before and after every sample, including failed samples. Set `LIFEMATE_PROMPT_CACHE=0` for a comparison without reuse. `llm.cache` events report reused and fresh tokens; `llm.output` reports prefill and generation wall times. Initial prompt processing remains necessary, and GPU speed gains have not yet been measured.
 
@@ -90,6 +99,7 @@ Current experiments use the same 12 inspected train development samples. Public 
 | Responsibility | File |
 | --- | --- |
 | Input/catalog/runtime adapter | `src/lifemate/input_adapter.py` |
+| App-level tool router | `src/lifemate/routing.py` |
 | ASR and language-model backend | `src/lifemate/backend.py` |
 | Local Gipformer runtime | `src/lifemate/asr.py` |
 | Message-level prompt controls | `src/lifemate/prompts.py` |

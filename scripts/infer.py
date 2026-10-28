@@ -7,6 +7,7 @@ owns deterministic decoding, timeout enforcement, and <=16,384 total tokens.
 import argparse
 import importlib
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -15,6 +16,7 @@ import math
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from lifemate.agent import run_agent
 from lifemate.input_adapter import SplitInput
+from lifemate.routing import SafeToolRouter, clean_context_for_prompt
 from lifemate.step_log import StepLog
 
 
@@ -97,17 +99,26 @@ def main():
                     return text
                 messages = [{'role': 'system', 'content': {
                     'instruction': 'Fulfil the latest user request through the allowed tools. Prior history actions are already applied. Resolve dates using sample context. Ask for unresolved required information; never invent entity IDs.',
-                    'context': item['context']}}]
+                    'context': clean_context_for_prompt(item['context'])}}]
+                all_text = []
                 for turn in item['history']:
                     if turn['role'] == 'user':
                         text = transcribe_logged(turn['audio'], 'history')
+                        all_text.append(text)
                         messages.append({'role': 'user', 'content': text})
                     else:
                         messages.append(turn)
                 text = transcribe_logged(item['audio'], 'latest')
+                all_text.append(text)
                 messages.append({'role': 'user', 'content': text})
-                row, log = run_agent(env, backend.decide, messages, split.tools(item), deadline,
-                                     emit=detail.emit if detail else None)
+                tools = split.tools(item)
+                pruned_tools = SafeToolRouter(tools).route(
+                    ' '.join(all_text),
+                    enabled=os.environ.get('LIFEMATE_TOOL_PRUNING', '0') == '1'
+                )
+                row, log = run_agent(env, backend.decide, messages, pruned_tools, deadline,
+                                     emit=detail.emit if detail else None,
+                                     continue_after_read=os.environ.get('LIFEMATE_CONTINUE_AFTER_READ','1')=='1')
             except Exception as error:
                 # Keep the same environment and every call made before failure.
                 row = {'tool_calls': env.get_tool_calls(), 'state_hash': env.get_state_hash()}

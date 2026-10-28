@@ -28,6 +28,31 @@ class FakeEnv:
         return 'fake-hash'
 
 
+TOOLS = [{'name': 'weather.get_forecast', 'kind': 'read'},
+         {'name': 'calendar.list_events', 'kind': 'read'},
+         {'name': 'calendar.update_event', 'kind': 'write'},
+         {'name': 'sms.send', 'kind': 'write'},
+         {'name': 'sys.ask_missing_info', 'kind': 'meta'}]
+
+
+def read():
+    return [{'name': 'weather.get_forecast', 'arguments': {'date': '2026-11-29'}}]
+
+
+def multi_read():
+    return [{'name': 'weather.get_forecast', 'arguments': {'date': '2026-11-29'}},
+            {'name': 'calendar.list_events', 'arguments': {}}]
+
+
+def write():
+    return [{'name': 'calendar.update_event', 'arguments': {'event_id': 'evt_01'}}]
+
+
+def multi_write():
+    return [{'name': 'calendar.update_event', 'arguments': {'event_id': 'evt_01'}},
+            {'name': 'sms.send', 'arguments': {'contact_id': 'c_08', 'content': 'ok'}}]
+
+
 class PipelineTests(unittest.TestCase):
     def test_validation_repair_does_not_execute_invalid_call(self):
         env = FakeEnv()
@@ -41,6 +66,36 @@ class PipelineTests(unittest.TestCase):
         row, log = run_agent(FakeEnv(), lambda *_: self.fail('backend called'), [], [], 0)
         self.assertEqual(row['tool_calls'], [])
         self.assertEqual(log['termination'], 'deadline')
+
+    def test_continue_after_read_reminds_when_empty_after_read(self):
+        env = FakeEnv()
+        decisions = iter([read(), [], write(), []])
+        row, log = run_agent(env, lambda *_: next(decisions), [], TOOLS, time.monotonic() + 5, continue_after_read=True)
+        self.assertEqual([c['name'] for c in row['tool_calls']], ['weather.get_forecast', 'calendar.update_event'])
+        self.assertTrue(log['continued_after_read'])
+        self.assertEqual(log['termination'], 'finished')
+
+    def test_batched_reads_execute_and_count_as_read_executed(self):
+        """Both reads in a multi-read batch should execute, and write follows on next turn."""
+        env = FakeEnv()
+        decisions = iter([multi_read(), multi_write(), []])
+        row, log = run_agent(env, lambda *_: next(decisions), [], TOOLS, time.monotonic() + 5)
+        names = [c['name'] for c in row['tool_calls']]
+        self.assertIn('weather.get_forecast', names)
+        self.assertIn('calendar.list_events', names)
+        self.assertIn('calendar.update_event', names)
+        self.assertIn('sms.send', names)
+        self.assertEqual(log['termination'], 'finished')
+        # No spurious reminder when write did execute
+        self.assertFalse(log['continued_after_read'])
+
+    def test_batched_reads_trigger_remind_if_no_write_follows(self):
+        """Multi-read batch with no subsequent write should trigger the continue reminder."""
+        env = FakeEnv()
+        decisions = iter([multi_read(), [], write(), []])
+        row, log = run_agent(env, lambda *_: next(decisions), [], TOOLS, time.monotonic() + 5, continue_after_read=True)
+        self.assertTrue(log['continued_after_read'])
+        self.assertIn('calendar.update_event', [c['name'] for c in row['tool_calls']])
 
     def test_clarification_stops_remaining_batch(self):
         env=FakeEnv()
