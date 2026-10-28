@@ -4,6 +4,8 @@ Source for a Vietnamese voice assistant using **Gipformer 1.5 68M RNN-T**, **Qwe
 
 Audio and conversation history → local ASR → controlled LLM tool calls → organiser ToolEnv → `submission.jsonl`.
 
+For Kaggle, import [notebooks/kaggle_pipeline.ipynb](notebooks/kaggle_pipeline.ipynb) and follow the [notebook instructions](notebooks/README.md). It clones this repository, prepares models, and runs on your attached dataset.
+
 ## Setup
 
 Use Python 3.11+ and a CUDA-capable environment for the LLM:
