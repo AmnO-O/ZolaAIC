@@ -154,9 +154,11 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                     q = 'Sếp ' + q[4:]
                 elif q.lower() == 'xếp':
                     q = 'Sếp'
-                # Correct acoustic/model distortion on common Vietnamese names
-                if any(w in q.lower() for w in ('dựng', 'dưng', 'dung')):
-                    q = q.replace('dựng', 'Dũng').replace('Dựng', 'Dũng').replace('dưng', 'Dũng').replace('Dưng', 'Dũng').replace('dung', 'Dũng').replace('Dung', 'Dũng')
+                # Correct acoustic/model distortion based on exact user speech transcript
+                user_text = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+                if 'dũng' in user_text:
+                    for typo in ('dựng', 'Dựng', 'dưng', 'Dưng', 'dung', 'Dung'):
+                        q = q.replace(typo, 'Dũng')
                 if q.lower() in ('cô mai', 'cô giáo mai'):
                     q = 'Cô giáo Mai'
                 if q.lower() in ('bác ba', 'bac ba'):
