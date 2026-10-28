@@ -129,6 +129,17 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(row['tool_calls'][0]['arguments'], {'date': '2026-11-29'})
         self.assertNotIn('location', row['tool_calls'][0]['arguments'])
 
+    def test_relative_date_resolved_correctly_from_context(self):
+        env = FakeEnv()
+        # Model passed wrong copied date 2026-11-29, but context is 2026-11-20
+        decisions = iter([[{'name': 'weather.get_forecast', 'arguments': {'date': '2026-11-29'}}], []])
+        messages = [
+            {'role': 'system', 'content': {'context': {'current_time': '2026-11-20T15:30:00+07:00'}}},
+            {'role': 'user', 'content': 'Xem giúp mai có mưa không'}
+        ]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(row['tool_calls'][0]['arguments']['date'], '2026-11-21')
+
     def test_unrequested_calendar_dates_are_stripped(self):
         env = FakeEnv()
         decisions = iter([[{'name': 'calendar.list_events', 'arguments': {'date_from': '2026-11-29', 'date_to': '2026-11-29'}}], []])

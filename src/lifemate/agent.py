@@ -66,7 +66,7 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
             has_msg_tool = any(t['name'] in ('sms.send', 'chat_ott.send', 'phone.call') for t in tools)
             has_msg_executed = any(c['name'] in ('sms.send', 'chat_ott.send', 'phone.call') for c in env.get_tool_calls())
             if (write_executed and has_msg_intent and has_msg_tool and not has_msg_executed
-                    and not reminded_multi and (deadline - time.monotonic()) > 4.0):
+                    and not reminded_multi and (deadline - time.monotonic()) > 1.0):
                 reminded_multi = True
                 messages.append({'role': 'user', 'content': 'You have updated the system/calendar, but you have not yet sent the requested message/notification to the recipient. Please search the contact if needed and send the message now.'})
                 if emit:
@@ -90,6 +90,33 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None,
                 loc = str(call['arguments']['location']).lower()
                 if loc not in user_text:
                     del call['arguments']['location']
+
+            # Resolve relative dates (mai / hôm nay) in weather tools
+            if call['name'] == 'weather.get_forecast' and 'date' in call.get('arguments', {}):
+                user_text = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+                current_date = None
+                for m in messages:
+                    c = m.get('content')
+                    if isinstance(c, dict):
+                        ctx = c.get('context', {})
+                        if 'current_time' in ctx:
+                            current_date = str(ctx['current_time'])[:10]
+                            break
+                if current_date:
+                    from datetime import datetime, timedelta
+                    try:
+                        curr_dt = datetime.strptime(current_date, '%Y-%m-%d')
+                        has_tomorrow = any(w in user_text for w in ('mai', 'ngày mai', 'sáng mai', 'chiều mai', 'tối mai'))
+                        has_today = any(w in user_text for w in ('hôm nay', 'chiều nay', 'tối nay', 'sáng nay'))
+                        if has_tomorrow and not has_today:
+                            expected_date = (curr_dt + timedelta(days=1)).strftime('%Y-%m-%d')
+                            if call['arguments']['date'] != expected_date:
+                                call['arguments']['date'] = expected_date
+                        elif has_today and not has_tomorrow:
+                            if call['arguments']['date'] != current_date:
+                                call['arguments']['date'] = current_date
+                    except Exception:
+                        pass
 
             # Clean unrequested date filters in calendar.list_events
             if call['name'] == 'calendar.list_events' and ('date_from' in call['arguments'] or 'date_to' in call['arguments']):
