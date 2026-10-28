@@ -47,7 +47,9 @@ For development, add `--step-log result/steps.jsonl --verbose-steps` to save eve
 python -B -m unittest discover -s tests -v
 ```
 
-The 16 local tests cover prompt integration, tool parsing, ASR configuration, controller behavior, and submission export with synthetic fixtures. They do not require competition data or downloaded models. An actual offline CPU ASR smoke also passed; no new end-to-end accuracy improvement is claimed.
+The local tests cover prompt integration, tool parsing, ASR configuration, controller behavior, prompt-cache correctness, and submission export with synthetic fixtures. Cache tests include greedy-output parity against uncached generation using a tiny, randomly initialized Qwen model. They do not require competition data or downloaded models. An actual offline CPU ASR smoke also passed; no new end-to-end accuracy improvement is claimed.
+
+Prompt KV reuse is enabled within each sample and reset between samples. The backend checks exact token prefixes and crops mismatching suffixes before reuse. Set `LIFEMATE_PROMPT_CACHE=0` to disable it. Detailed traces record cache hits and prefill/generation wall times; GPU speedups remain to be measured.
 
 `scripts/evaluate.py` provides train-only diagnostic evaluation; it is not an official scorer. Reference transcripts and labels must remain development-only.
 

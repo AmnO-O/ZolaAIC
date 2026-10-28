@@ -38,6 +38,9 @@ def ToolEnv(split,sample_id,root):
 ''')
             (base/'fake_backend.py').write_text('''
 class Backend:
+ def reset_sample(self):
+  import os
+  with open(os.environ['RESET_LOG'],'a') as log:log.write('reset\\n')
  def transcribe(self,path,remaining):return 'Invented memo request'
  def decide(self,messages,tools,remaining):
   import os
@@ -51,11 +54,13 @@ def create():return Backend()
             output=base/'submission.jsonl'
             environment=os.environ.copy()
             environment['PYTHONPATH']=str(base)
+            environment['RESET_LOG']=str(base/'resets.txt')
             result=subprocess.run([sys.executable,'-B',str(root/'scripts/infer.py'),
                 '--split-dir',str(split),'--backend','fake_backend:create','--budget-seconds','60','--output',str(output),
                 '--step-log',str(base/'steps.jsonl'),'--verbose-steps'],
                 env=environment,capture_output=True,text=True,timeout=20)
             self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(len((base/'resets.txt').read_text().splitlines()),2)
             row=json.loads(output.read_text())
             self.assertEqual(row['tool_calls'],[{'name':'memo.create','arguments':{'text':'invented memo'}}])
             self.assertEqual(row['state_hash'],'0'*64)
@@ -87,6 +92,7 @@ def create():return Backend()
                 '--step-log',str(failed_steps)],env={**environment,'SIMULATE_FAILURE':'1'},
                 capture_output=True,text=True,timeout=20)
             self.assertEqual(failed.returncode,0,failed.stderr)
+            self.assertEqual(len((base/'resets.txt').read_text().splitlines()),4)
             failure_events=[json.loads(line) for line in failed_steps.read_text().splitlines()]
             self.assertIn('sample.error',[event['stage'] for event in failure_events])
             self.assertEqual(failure_events[-1]['termination'],'error')

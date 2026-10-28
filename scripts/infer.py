@@ -72,6 +72,9 @@ def main():
             if args.limit is not None and count >= args.limit:
                 break
             count += 1
+            reset_sample = getattr(backend, 'reset_sample', None)
+            if reset_sample:
+                reset_sample()
             start = time.monotonic()
             deadline = start + args.budget_seconds
             if detail:
@@ -110,6 +113,9 @@ def main():
                 log = {'termination': 'error', 'error_type': type(error).__name__, 'error_message':str(error)}
                 if detail:
                     detail.emit('sample.error', output=log)
+            finally:
+                if reset_sample:
+                    reset_sample()
             row['id'] = item['id']
             target.write(json.dumps(row, ensure_ascii=False) + '\n')
             target.flush()

@@ -86,6 +86,12 @@ class LocalBackend:
         from .prompts import PromptControls
         self.prompt_controls=PromptControls(prompt_mode)
         self.asr_kind=asr_kind
+        from .prompt_cache import PromptCache
+        self.prompt_cache = PromptCache()
+        self.reuse_prompt_cache = os.environ.get('LIFEMATE_PROMPT_CACHE', '1') == '1'
+
+    def reset_sample(self):
+        self.prompt_cache.reset()
 
     def decide(self, messages, tools, remaining_seconds):
         if remaining_seconds <= 0:
@@ -105,6 +111,7 @@ class LocalBackend:
             turns, tools=native_tools, add_generation_prompt=True,
             tokenize=True, return_tensors='pt', return_dict=True)
         tokens = encoded['input_ids'].shape[-1]
+        token_ids = encoded['input_ids'][0].tolist()
         budget = min(384, 16384-tokens)
         if budget <= 0:
             raise ValueError('Context exceeds 16K; refusing silent truncation')
@@ -114,11 +121,16 @@ class LocalBackend:
                  'rendered_prompt': self.tokenizer.decode(encoded['input_ids'][0], skip_special_tokens=False)},
                  input_tokens=tokens, max_new_tokens=budget)
         encoded = {k: v.to(self.device) for k, v in encoded.items()}
+        cache, reused = self.prompt_cache.take(token_ids) if self.reuse_prompt_cache else (None, 0)
+        if emit:
+            emit('llm.cache', input_tokens=tokens, cached_tokens=reused,
+                 prefill_tokens=tokens-1-reused, fresh_tokens=tokens-reused,
+                 enabled=self.reuse_prompt_cache)
+        prefill_started = time.monotonic()
         with self.torch.inference_mode():
             # Deterministic SDPA on T4 can fall back to quadratic-memory math
             # attention. Prefill in bounded query chunks while retaining KV.
-            cache = None
-            for offset in range(0, max(0, tokens-1), 256):
+            for offset in range(reused, max(0, tokens-1), 256):
                 if time.monotonic() >= end:
                     raise TimeoutError('Prompt processing deadline reached')
                 stop = min(offset+256, tokens-1)
@@ -128,18 +140,35 @@ class LocalBackend:
                     past_key_values=cache, use_cache=True, logits_to_keep=1)
                 cache = prefill.past_key_values
                 del prefill
+            if str(self.device).startswith('cuda'):
+                self.torch.cuda.synchronize(self.device)
+            if time.monotonic() >= end:
+                raise TimeoutError('Prompt processing deadline reached')
+            prefill_seconds = time.monotonic() - prefill_started
+            generation_started = time.monotonic()
             generated = self.model.generate(
                 **encoded, max_new_tokens=budget, do_sample=False,
                 past_key_values=cache,
+                return_dict_in_generate=True,
                 stopping_criteria=StoppingCriteriaList([Deadline()]),
                 pad_token_id=self.tokenizer.eos_token_id)
-        text = self.tokenizer.decode(generated[0, tokens:], skip_special_tokens=True)
+        sequences = generated.sequences
+        if str(self.device).startswith('cuda'):
+            self.torch.cuda.synchronize(self.device)
+        generation_seconds = time.monotonic() - generation_started
+        text = self.tokenizer.decode(sequences[0, tokens:], skip_special_tokens=True)
         if emit:
-            emit('llm.output', output=text, output_tokens=generated.shape[-1]-tokens)
-        self.stats.append({'input_tokens': tokens, 'output_tokens': generated.shape[-1]-tokens})
+            emit('llm.output', output=text, output_tokens=sequences.shape[-1]-tokens,
+                 cached_tokens=reused, prefill_seconds=prefill_seconds, generation_seconds=generation_seconds)
+        self.stats.append({'input_tokens': tokens, 'output_tokens': sequences.shape[-1]-tokens,
+                          'cached_tokens': reused, 'prefill_seconds': prefill_seconds,
+                          'generation_seconds': generation_seconds})
         if time.monotonic() >= end:
             raise TimeoutError('Model generation deadline reached')
-        return parse_calls(text)
+        calls = parse_calls(text)
+        if self.reuse_prompt_cache:
+            self.prompt_cache.store(generated.past_key_values, token_ids[:-1])
+        return calls
 
     def transcribe(self, path, remaining_seconds):
         if self.asr is None:

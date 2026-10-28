@@ -16,4 +16,6 @@ Model downloads can take several minutes and require disk space for the roughly 
 
 The default sample budget is 27 seconds. A larger development budget does not satisfy the competition's 30-second requirement. Kaggle timings and diagnostic train metrics do not establish final A30 performance or the official score.
 
+`PROMPT_CACHE = True` enables within-sample prompt KV reuse in the Transformers backend. Set it to false to compare full prompt processing. The cache resets for every query. Inspect `llm.cache` events for `cached_tokens` and `fresh_tokens`, and `llm.output` for `prefill_seconds` and `generation_seconds`.
+
 Detailed query tracing is enabled by default with `STEP_LOGGING = True`. With `LIVE_STEPS = True`, live output and `inference.log` include each stage's full inputs and outputs as formatted JSON. `steps.jsonl` stores full inputs/outputs, and the final notebook cell displays expandable steps for a selected `QUERY_ID`. Logs include context, transcripts, the rendered LLM prompt, generated tool-call text, validation, tool results, and final predictions. They contain observed data and generated output, not hidden model reasoning. Keep them private. Disable logging for performance measurements because writing full prompts adds overhead.
