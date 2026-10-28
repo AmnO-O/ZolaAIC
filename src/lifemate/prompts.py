@@ -13,7 +13,7 @@ CRITICAL RULES:
    - Any parameter with an ID constraint (e.g. contact_id, event_id, device_id, bill_id, lock_id, scene_id) MUST be an actual ID observed from a previous tool result.
    - NEVER fabricate placeholder IDs such as "contact_123", "evt_01", "device_1"!
    - If you need to send an SMS/message to a person, you MUST FIRST call contacts.search to find their real contact_id.
-   - If you need to update/cancel an event, you MUST FIRST call calendar.list_events to discover the real event_id and original time.
+   - If you need to update/cancel an event, you MUST FIRST call calendar.list_events to discover the real event_id and original time. When calling calendar.list_events to look up an event to update or cancel, pass NO arguments (use {}) unless the user explicitly asked to filter the calendar view by date.
    - If you need to control a device, you MUST FIRST call smart_home.get_status to discover the real device_id.
 
 2. STRICT MINIMAL ARGUMENTS:
@@ -24,8 +24,8 @@ CRITICAL RULES:
 
 3. EXECUTE ALL REQUESTED ACTIONS:
    - The user request often contains multiple operations (e.g. "dời lịch chạy bộ và nhắn sếp"). You MUST execute EVERY part!
-   - For "dời lịch" (postpone/reschedule an event): you MUST update the calendar event (calendar.update_event), NOT just send a message.
-   - For conditional requests: check the condition first, then execute all actions required in that condition branch.
+   - For "dời lịch" (postpone/reschedule an event): you MUST update the calendar event (calendar.update_event), AND if the user asked to notify or message someone (e.g. "nhắn sếp Dũng giờ mới"), you MUST also send the message. Do NOT stop after updating the calendar!
+   - For conditional requests (e.g. "Nếu mai mưa thì... không mưa thì thôi"): check the condition first (e.g. weather.get_forecast). If the condition is met, execute ALL requested actions in that branch!
 
 4. MESSAGE CONTENT FIDELITY:
    - When sending an SMS or message, write a short, direct message conveying the user's intent (e.g. "mai chạy bộ dời sang 09:00 nhé").
@@ -42,13 +42,15 @@ Before finishing, check that every requested action has been executed. Use nativ
 # Each example shows ONLY the first tool call response; the conversation continues
 # with results before any dependent calls are made.
 EXAMPLES = [
-    # Multi-read batch: weather + calendar list are independent reads — return both at once.
-    # Then writes (update_event, sms) happen in the NEXT turn after seeing results.
-    ({'weather.get_forecast', 'calendar.list_events', 'calendar.update_event',
-      'contacts.search', 'sms.send'}, {
-      'request': 'Nếu mai mưa thì dời lịch chạy bộ muộn 1 tiếng và nhắn sếp Dũng giờ mới.',
-      'behavior': '<tool_call>{"name":"weather.get_forecast","arguments":{"date":"2030-06-03"}}</tool_call>'
-                  '<tool_call>{"name":"calendar.list_events","arguments":{}}</tool_call>'}),
+    # Multi-action lookups: both calendar.list_events and contacts.search are independent lookups to discover IDs before writing.
+    ({'calendar.list_events', 'calendar.update_event', 'contacts.search', 'sms.send'}, {
+      'request': 'Dời lịch chạy bộ muộn 1 tiếng và nhắn sếp Dũng giờ mới.',
+      'behavior': '<tool_call>{"name":"calendar.list_events","arguments":{}}</tool_call>'
+                  '<tool_call>{"name":"contacts.search","arguments":{"query":"sếp Dũng"}}</tool_call>'}),
+    # Conditional check: check condition first before taking action.
+    ({'weather.get_forecast', 'calendar.cancel_event'}, {
+      'request': 'Nếu mai mưa thì hủy lịch đá bóng, không mưa thì thôi.',
+      'behavior': '<tool_call>{"name":"weather.get_forecast","arguments":{"date":"2026-11-29"}}</tool_call>'}),
     # Missing info: no content supplied — ask before doing anything.
     ({'notes.create', 'sys.ask_missing_info'}, {
       'request': 'Tạo một ghi chú giúp tôi.',

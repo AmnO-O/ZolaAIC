@@ -39,6 +39,7 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None,
     read_executed = False
     write_executed = False
     reminded = False
+    reminded_multi = False
     for _ in range(max_turns):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -52,6 +53,7 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None,
         if not isinstance(calls, list):
             raise ValueError('Backend must return a list of tool calls')
         if not calls:
+            user_text = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
             if (continue_after_read and not reminded and read_executed
                     and not write_executed and (deadline - time.monotonic()) > 0):
                 reminded = True
@@ -59,6 +61,18 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None,
                 if emit:
                     emit('controller.continue', output={'reason': 'read_without_action'})
                 continue
+
+            has_msg_intent = any(w in user_text for w in ('nhắn', 'gửi tin', 'báo cho', 'báo giờ', 'sms', 'gọi'))
+            has_msg_tool = any(t['name'] in ('sms.send', 'chat_ott.send', 'phone.call') for t in tools)
+            has_msg_executed = any(c['name'] in ('sms.send', 'chat_ott.send', 'phone.call') for c in env.get_tool_calls())
+            if (write_executed and has_msg_intent and has_msg_tool and not has_msg_executed
+                    and not reminded_multi and (deadline - time.monotonic()) > 4.0):
+                reminded_multi = True
+                messages.append({'role': 'user', 'content': 'You have updated the system/calendar, but you have not yet sent the requested message/notification to the recipient. Please search the contact if needed and send the message now.'})
+                if emit:
+                    emit('controller.continue', output={'reason': 'multi_action_incomplete'})
+                continue
+
             reason = 'finished'
             break
         messages.append({'role': 'assistant', 'tool_calls': calls})
@@ -76,6 +90,22 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=6, emit=None,
                 loc = str(call['arguments']['location']).lower()
                 if loc not in user_text:
                     del call['arguments']['location']
+
+            # Clean unrequested date filters in calendar.list_events
+            if call['name'] == 'calendar.list_events' and ('date_from' in call['arguments'] or 'date_to' in call['arguments']):
+                user_text = ' '.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user').lower()
+                view_keywords = ('xem lịch', 'coi lịch', 'có lịch', 'lịch hôm', 'lịch ngày', 'lịch thứ', 'lịch tuần', 'kiểm tra lịch')
+                if not any(k in user_text for k in view_keywords):
+                    call['arguments'].pop('date_from', None)
+                    call['arguments'].pop('date_to', None)
+
+            # Normalize common Vietnamese ASR phonetic variations in contacts.search
+            if call['name'] == 'contacts.search' and 'query' in call.get('arguments', {}):
+                q = str(call['arguments']['query']).strip()
+                if q.lower().startswith('xếp '):
+                    call['arguments']['query'] = 'Sếp ' + q[4:]
+                elif q.lower() == 'xếp':
+                    call['arguments']['query'] = 'Sếp'
 
             # Intercept ungrounded/fabricated IDs for x-ref parameters
             bad_id_error = None

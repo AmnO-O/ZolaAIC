@@ -129,6 +129,49 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(row['tool_calls'][0]['arguments'], {'date': '2026-11-29'})
         self.assertNotIn('location', row['tool_calls'][0]['arguments'])
 
+    def test_unrequested_calendar_dates_are_stripped(self):
+        env = FakeEnv()
+        decisions = iter([[{'name': 'calendar.list_events', 'arguments': {'date_from': '2026-11-29', 'date_to': '2026-11-29'}}], []])
+        messages = [{'role': 'user', 'content': 'Nếu mai mưa thì dời chạy bộ muộn 1 tiếng'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(len(row['tool_calls']), 1)
+        self.assertEqual(row['tool_calls'][0]['arguments'], {})
+
+    def test_requested_calendar_dates_are_preserved(self):
+        env = FakeEnv()
+        decisions = iter([[{'name': 'calendar.list_events', 'arguments': {'date_from': '2026-11-29', 'date_to': '2026-11-29'}}], []])
+        messages = [{'role': 'user', 'content': 'Xem lịch hôm nay giúp tôi'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(len(row['tool_calls']), 1)
+        self.assertEqual(row['tool_calls'][0]['arguments'], {'date_from': '2026-11-29', 'date_to': '2026-11-29'})
+
+    def test_contacts_search_normalizes_xep_to_sep(self):
+        env = FakeEnv()
+        tools = [{'name': 'contacts.search', 'kind': 'read'}]
+        decisions = iter([[{'name': 'contacts.search', 'arguments': {'query': 'Xếp Dũng'}}], []])
+        messages = [{'role': 'user', 'content': 'Nhắn xếp Dũng giờ mới'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(row['tool_calls'][0]['arguments']['query'], 'Sếp Dũng')
+
+    def test_multi_action_incomplete_triggers_reminder(self):
+        env = FakeEnv()
+        # Turn 1: write calendar.update_event
+        # Turn 2: empty (model thinks it's done, but hasn't sent sms)
+        # Turn 3: after reminder, calls sms.send
+        # Turn 4: empty (finished)
+        def mock_decide(msgs, tools, remaining):
+            last_msg = msgs[-1]
+            if last_msg.get('role') == 'user' and 'updated the system/calendar' in str(last_msg.get('content', '')):
+                return [{'name': 'sms.send', 'arguments': {'contact_id': 'c_08', 'content': 'done'}}]
+            if len(env.get_tool_calls()) == 0:
+                return [{'name': 'calendar.update_event', 'arguments': {'event_id': 'evt_01'}}]
+            return []
+
+        messages = [{'role': 'user', 'content': 'Dời lịch chạy bộ và nhắn tin cho Dũng nhé'}]
+        row, log = run_agent(env, mock_decide, messages, TOOLS, time.monotonic() + 5)
+        called_names = [c['name'] for c in row['tool_calls']]
+        self.assertEqual(called_names, ['calendar.update_event', 'sms.send'])
+
     def test_train_labels_and_transcripts_are_removed(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / 'artifacts') as temporary:
             root = Path(temporary)
