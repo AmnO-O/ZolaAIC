@@ -134,7 +134,7 @@ def evaluate_target(target_path_str, train_dir='../train'):
             blocked_turns_count = 0
 
     # Compute metrics
-    official_f1_list = []
+    diag_f1_list = []
     name_f1_list = []
     latencies = []
     timeouts_50 = 0
@@ -142,17 +142,17 @@ def evaluate_target(target_path_str, train_dir='../train'):
     detailed_rows = []
 
     print("=" * 105)
-    print(f"{'ID':<12} | {'OffF1':<5} | {'NmF1':<5} | {'P':<3} | {'G':<3} | {'M':<3} | {'Secs':<6} | {'Turns':<5} | {'Term':<10} | {'Status'}")
+    print(f"{'ID':<12} | {'DiagF1':<6} | {'NmF1':<5} | {'P':<3} | {'G':<3} | {'M':<3} | {'Secs':<6} | {'Turns':<5} | {'Term':<10} | {'Status'}")
     print("=" * 105)
 
     for sid, pred_calls in sorted(preds.items()):
         gold_data = gold_map.get(sid, {})
         gold_calls = gold_data.get('label', {}).get('tool_calls', [])
         
-        # Official call_metrics (with argument matching)
-        off_metric = call_metrics(pred_calls, gold_calls, specs)
-        off_f1 = off_metric['f1']
-        official_f1_list.append(off_f1)
+        # Diagnostic call_metrics (with argument matching)
+        diag_metric = call_metrics(pred_calls, gold_calls, specs)
+        diag_f1 = diag_metric['f1']
+        diag_f1_list.append(diag_f1)
 
         # Name-only F1
         nm_f1, nm_m, p_cnt, g_cnt = compute_tool_name_f1(pred_calls, gold_calls)
@@ -169,21 +169,22 @@ def evaluate_target(target_path_str, train_dir='../train'):
 
         turns = sample_turns.get(sid, 1)
 
-        status = "F1=1.0" if off_f1 == 1.0 else ("PARTIAL" if off_f1 > 0 else "ZERO")
+        status = "F1=1.0" if diag_f1 == 1.0 else ("PARTIAL" if diag_f1 > 0 else "ZERO")
         if termination == 'error':
             status += " (TIMEOUT)"
         if sid in blocked_samples:
             status += " [BLOCKED]"
 
-        print(f"{sid:<12} | {off_f1:<5.3f} | {nm_f1:<5.3f} | {off_metric['predicted']:<3} | {off_metric['gold']:<3} | {off_metric['matched']:<3} | {elapsed:<6.2f} | {turns:<5} | {termination:<10} | {status}")
+        print(f"{sid:<12} | {diag_f1:<6.3f} | {nm_f1:<5.3f} | {diag_metric['predicted']:<3} | {diag_metric['gold']:<3} | {diag_metric['matched']:<3} | {elapsed:<6.2f} | {turns:<5} | {termination:<10} | {status}")
 
         detailed_rows.append({
             'id': sid,
-            'official_f1': off_f1,
+            'diagnostic_f1': diag_f1,
+            'official_f1': diag_f1,  # alias for backwards compatibility
             'name_f1': nm_f1,
-            'pred_count': off_metric['predicted'],
-            'gold_count': off_metric['gold'],
-            'matched': off_metric['matched'],
+            'pred_count': diag_metric['predicted'],
+            'gold_count': diag_metric['gold'],
+            'matched': diag_metric['matched'],
             'elapsed_seconds': elapsed,
             'termination': termination,
             'turns': turns,
@@ -192,7 +193,7 @@ def evaluate_target(target_path_str, train_dir='../train'):
             'gold_calls': gold_calls
         })
 
-    macro_official_f1 = sum(official_f1_list) / len(official_f1_list) if official_f1_list else 0.0
+    macro_diag_f1 = sum(diag_f1_list) / len(diag_f1_list) if diag_f1_list else 0.0
     macro_name_f1 = sum(name_f1_list) / len(name_f1_list) if name_f1_list else 0.0
     mean_latency = sum(latencies) / len(latencies) if latencies else 0.0
     max_latency = max(latencies) if latencies else 0.0
@@ -200,20 +201,21 @@ def evaluate_target(target_path_str, train_dir='../train'):
 
     print("=" * 105)
     print(f"Summary for: {run_name}")
-    print(f"Total samples:               {len(official_f1_list)}")
-    print(f"Official Macro Tool F1:      {macro_official_f1:.4f}")
-    print(f"Name-Only Macro Tool F1:     {macro_name_f1:.4f}")
-    print(f"Mean Latency:                {mean_latency:.2f}s (max: {max_latency:.2f}s)")
-    print(f"Samples >= 30s:              {over_30}")
-    print(f"Samples Timeout (>= 50s):    {timeouts_50}")
-    print(f"Grounding Rejections:        {len(blocked_samples)} samples, {blocked_turns_count} turns, {blocked_calls_count} calls")
-    print(f"Mean Turns / Sample:         {mean_turns:.2f}")
+    print(f"Total samples:                 {len(diag_f1_list)}")
+    print(f"Diagnostic Macro Tool F1:      {macro_diag_f1:.4f}")
+    print(f"Name-Only Macro Tool F1:       {macro_name_f1:.4f}")
+    print(f"Mean Latency:                  {mean_latency:.2f}s (max: {max_latency:.2f}s)")
+    print(f"Samples >= 30s:                {over_30}")
+    print(f"Samples Timeout (>= 50s):      {timeouts_50}")
+    print(f"Grounding Rejections:          {len(blocked_samples)} samples, {blocked_turns_count} turns, {blocked_calls_count} calls")
+    print(f"Mean Turns / Sample:           {mean_turns:.2f}")
     print("=" * 105)
 
     summary_out = {
         'target': str(target_path),
-        'samples': len(official_f1_list),
-        'macro_official_f1': macro_official_f1,
+        'samples': len(diag_f1_list),
+        'diagnostic_macro_tool_f1': macro_diag_f1,
+        'macro_official_f1': macro_diag_f1,  # alias for backwards compatibility
         'macro_name_f1': macro_name_f1,
         'mean_latency': mean_latency,
         'max_latency': max_latency,
