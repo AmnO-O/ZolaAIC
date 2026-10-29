@@ -40,7 +40,7 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(output[1:],original[1:])
         self.assertEqual(sum(m['role']=='system' for m in output),1)
         self.assertIn('SAMPLE_CONTEXT_TIME',output[0]['content'])
-        self.assertEqual(output[0]['content'].count(INSTRUCTION),1)
+        self.assertEqual(output[0]['content'].count(self.controls.instruction),1)
         self.assertIn('Positive example',output[0]['content'])
         self.assertNotIn('"name":"sms.send"',output[0]['content'])
 
