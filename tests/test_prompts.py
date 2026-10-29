@@ -10,6 +10,7 @@ from lifemate.prompts import (
     INSTRUCTION_A,
     INSTRUCTION_B_ID,
     INSTRUCTION_B_COND,
+    INSTRUCTION_B_COND2,
     INSTRUCTION_B_COMBINED,
     EXAMPLES,
     get_instruction,
@@ -25,10 +26,14 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(get_instruction('a'), INSTRUCTION_A)
         self.assertEqual(get_instruction('b_id'), INSTRUCTION_B_ID)
         self.assertEqual(get_instruction('b_cond'), INSTRUCTION_B_COND)
+        self.assertEqual(get_instruction('b_cond2'), INSTRUCTION_B_COND2)
         self.assertEqual(get_instruction('b_combined'), INSTRUCTION_B_COMBINED)
         controls_bid = PromptControls('steerability', variant='b_id')
         output = controls_bid.apply([{'role': 'system', 'content': 'ctx'}, {'role': 'user', 'content': 'req'}], [])
         self.assertIn(INSTRUCTION_B_ID, output[0]['content'])
+        controls_bcond2 = PromptControls('steerability', variant='b_cond2')
+        output2 = controls_bcond2.apply([{'role': 'system', 'content': 'ctx'}, {'role': 'user', 'content': 'req'}], [])
+        self.assertIn(INSTRUCTION_B_COND2, output2[0]['content'])
 
     def test_context_tools_and_results_preserved_without_mutation(self):
         messages=[{'role':'system','content':'SAMPLE_CONTEXT_TIME'},
