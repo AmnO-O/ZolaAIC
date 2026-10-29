@@ -6,6 +6,39 @@ import unicodedata
 from datetime import datetime
 
 
+LOOKUP_TOOLS = {
+    'contacts.contacts': 'contacts.search',
+    'chat_ott.chats': 'chat_ott.list_chats',
+    'calendar.events': 'calendar.list_events',
+    'bill_payment.bills': 'bill_payment.list_bills',
+    'notes.notes': 'notes.list',
+    'reminders.reminders': 'reminders.list',
+    'alarm.alarms': 'alarm.list',
+    'tasks.tasks': 'tasks.list',
+    'smart_home.devices': 'smart_home.get_status',
+    'smart_home.scenes': 'smart_home.get_status',
+    'door_lock.locks': 'door_lock.list_locks',
+    'appliances.appliances': 'appliances.list',
+    'home_security.alerts': 'home_security.list_alerts',
+    'email.emails': 'email.list',
+    'video_meeting.meetings': 'video_meeting.list_meetings',
+    'banking.accounts': 'banking.get_balance',
+    'banking.beneficiaries': 'banking.list_beneficiaries',
+    'food_delivery.restaurants': 'food_delivery.list_restaurants',
+    'food_delivery.orders': 'food_delivery.order_history',
+    'learning.courses': 'learning.list_courses',
+    'bike_rental.bikes': 'bike_rental.find_bikes',
+    'household_chores.chores': 'household_chores.list_chores',
+    'subscriptions.subscriptions': 'subscriptions.list',
+    'shopping_list.items': 'shopping_list.get',
+    'package_tracking.deliveries': 'package_tracking.track',
+    'music.tracks': 'music.list_tracks',
+    'music.playlists': 'music.list_tracks',
+    'tv.programs': 'tv.guide',
+    'medication.schedules': 'medication.list',
+}
+
+
 def successful(result):
     return isinstance(result, dict) and result.get('ok') is True and result.get('done') is not False
 
@@ -127,6 +160,7 @@ class Evidence:
     def __init__(self, messages):
         self.ids = {}
         self.phones = set()
+        self.contacts_by_phone = {}
         self.events = {}
         self.successful_tools = set()
         self.user_text = '\n'.join(str(m.get('content', '')) for m in messages if m.get('role') == 'user')
@@ -168,6 +202,15 @@ class Evidence:
         self.successful_tools.add(name)
         self.ids.setdefault(name.split('.')[0], set()).update(identifier_values(result))
         self.phones.update(phone_values(result))
+        if name == 'contacts.search' and isinstance(result, dict) and isinstance(result.get('contacts'), list):
+            for contact in result['contacts']:
+                if isinstance(contact, dict) and 'id' in contact and 'phone' in contact:
+                    pk = phone_key(contact['phone'])
+                    if pk:
+                        if pk in self.contacts_by_phone and self.contacts_by_phone[pk] != contact['id']:
+                            self.contacts_by_phone[pk] = None
+                        elif pk not in self.contacts_by_phone:
+                            self.contacts_by_phone[pk] = contact['id']
         if name.startswith('calendar.'):
             events = list(result.get('events', []))
             if isinstance(result.get('item'), dict):
@@ -177,6 +220,39 @@ class Evidence:
                     self.events[event['id']] = copy.deepcopy(event)
 
     def check(self, tool, arguments, available=()):
+        available_names = set(available.keys()) if isinstance(available, dict) else {
+            t['name'] if isinstance(t, dict) else t for t in available}
+        available_specs = available if isinstance(available, dict) else {
+            t['name']: t for t in available if isinstance(t, dict)}
+
+        if tool.get('name') == 'sys.ask_missing_info':
+            target_name = arguments.get('tool_name')
+            if not target_name or not isinstance(target_name, str):
+                return "Missing or invalid 'tool_name' in sys.ask_missing_info arguments."
+            if target_name == 'sys.ask_missing_info':
+                return "Cannot request clarification for sys.ask_missing_info."
+            if available_names and target_name not in available_names:
+                return f"Tool {target_name!r} is not permitted for this sample."
+            target_spec = available_specs.get(target_name, {})
+            params = arguments.get('params')
+            if not isinstance(params, list) or not params:
+                return "Missing or empty 'params' list in sys.ask_missing_info arguments."
+            target_props = target_spec.get('parameters', {}).get('properties', {})
+            if target_props:
+                invalid_params = [p for p in params if p not in target_props]
+                if invalid_params:
+                    return f"Parameter(s) {invalid_params!r} do not exist in schema for tool {target_name!r}."
+            # Only gate 0-argument catalog list tools (chat_ott, calendar, bill_payment)
+            # where listing all items must precede asking the user for IDs.
+            for p in params:
+                ref = target_props.get(p, {}).get('x-ref') if target_props else None
+                if ref in ('chat_ott.chats', 'calendar.events', 'bill_payment.bills'):
+                    lookup_tool = LOOKUP_TOOLS.get(ref)
+                    if lookup_tool and lookup_tool in available_names and lookup_tool not in self.successful_tools:
+                        return (f"Cannot ask missing info for parameter {p!r}; lookup tool {lookup_tool!r} "
+                                f"is available and has not been executed yet. Call '{lookup_tool}' first.")
+            return None
+
         for key, schema in tool.get('parameters', {}).get('properties', {}).items():
             ref = schema.get('x-ref')
             if not ref or key not in arguments:
@@ -188,13 +264,20 @@ class Evidence:
                 known = str(value) in self.ids.get(ref.split('.')[0], set())
                 explicit = re.search(r'(?<!\w)' + re.escape(str(value)) + r'(?!\w)', self.user_text) is not None
                 if not known and not explicit:
-                    return f"Ungrounded ID {value!r} for {key}; obtain it from {ref} or explicit user input."
+                    lookup_tool = LOOKUP_TOOLS.get(ref)
+                    if lookup_tool and lookup_tool in available_names:
+                        return (f"Ungrounded ID {value!r} for parameter '{key}'. "
+                                f"Call '{lookup_tool}' first to look up valid IDs, or ask for missing info if no entity exists.")
+                    return f"Ungrounded ID {value!r} for parameter '{key}'; obtain it from explicit user input or relevant context."
         for key in ('phone', 'phone_number'):
             if key in arguments:
                 value = arguments[key]
                 if phone_key(value) not in self.phones and not explicit_phone(value, self.user_text):
-                    return f"Ungrounded phone number for {key}; use explicit user data or an observed contact result."
-        if tool.get('name') in ('ewallet.transfer', 'banking.transfer') and 'bill_payment.list_bills' in available:
+                    if 'contacts.search' in available_names:
+                        return (f"Ungrounded phone number {value!r} for parameter '{key}'. "
+                                f"Call 'contacts.search' first to retrieve the contact's phone number, or ask for missing info.")
+                    return f"Ungrounded phone number {value!r} for parameter '{key}'; use explicit user data or an observed contact result."
+        if tool.get('name') in ('ewallet.transfer', 'banking.transfer') and 'bill_payment.list_bills' in available_names:
             clauses = re.split(r';|\n|\bvà\b|\brồi\b|\bsau đó\b', normalize(self.latest_text))
             transfers = [clause for clause in clauses if re.search(r'\b(chuyển|gửi)\b', clause)]
             if len(transfers) == 1:
@@ -209,6 +292,8 @@ class Evidence:
         """Preserve model values; only resolve exact aliases or a unique observed event."""
         call = copy.deepcopy(original)
         name, args = call['name'], call['arguments']
+        if name == 'bill_payment.list_bills':
+            args.clear()
         if name in ('ride_hailing.book', 'ride_hailing.get_quotes'):
             profile = self.context.get('user_profile', {})
             aliases = {

@@ -346,5 +346,91 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual([t['name'] for t in split.tools(item)], ['sys.ask_missing_info'])
 
 
+    def test_ask_missing_info_rejected_for_unpermitted_target_tool(self):
+        env = FakeEnv()
+        tools = [{'name': 'sys.ask_missing_info', 'kind': 'meta'},
+                 {'name': 'smart_home.get_status', 'kind': 'read'}]
+        decisions = iter([
+            [{'name': 'sys.ask_missing_info', 'arguments': {'tool_name': 'ride_hailing.book', 'params': ['pickup']}}],
+            []
+        ])
+        messages = [{'role': 'user', 'content': 'Đặt xe ra sân bay'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
+        self.assertEqual(row['tool_calls'], [])
+        self.assertEqual(log['termination'], 'finished')
+        self.assertIn('validation_error', log['trace'][0]['result'])
+        self.assertIn('ride_hailing.book', log['trace'][0]['result']['validation_error'])
+
+    def test_ask_missing_info_rejected_before_chat_list(self):
+        env = FakeEnv()
+        tools = [
+            {'name': 'sys.ask_missing_info', 'kind': 'meta'},
+            {'name': 'chat_ott.list_chats', 'kind': 'read'},
+            {'name': 'chat_ott.send_message', 'kind': 'write', 'parameters': {
+                'properties': {'chat_id': {'type': 'string', 'x-ref': 'chat_ott.chats'}, 'content': {'type': 'string'}}}}
+        ]
+        decisions = iter([
+            [{'name': 'sys.ask_missing_info', 'arguments': {'tool_name': 'chat_ott.send_message', 'params': ['chat_id']}}],
+            []
+        ])
+        messages = [{'role': 'user', 'content': 'Nhắn tin qua Zalo cho Minh'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
+        self.assertEqual(row['tool_calls'], [])
+        self.assertIn('validation_error', log['trace'][0]['result'])
+        self.assertIn('chat_ott.list_chats', log['trace'][0]['result']['validation_error'])
+
+    def test_ask_missing_info_accepted_after_chat_list(self):
+        class ChatEnv(FakeEnv):
+            def call(self, name, args):
+                super().call(name, args)
+                if name == 'chat_ott.list_chats':
+                    return {'ok': True, 'chats': []}
+                return {'ok': True}
+
+        env = ChatEnv()
+        tools = [
+            {'name': 'sys.ask_missing_info', 'kind': 'meta'},
+            {'name': 'chat_ott.list_chats', 'kind': 'read'},
+            {'name': 'chat_ott.send_message', 'kind': 'write', 'parameters': {
+                'properties': {'chat_id': {'type': 'string', 'x-ref': 'chat_ott.chats'}, 'content': {'type': 'string'}}}}
+        ]
+        decisions = iter([
+            [{'name': 'chat_ott.list_chats', 'arguments': {}}],
+            [{'name': 'sys.ask_missing_info', 'arguments': {'tool_name': 'chat_ott.send_message', 'params': ['chat_id']}}]
+        ])
+        messages = [{'role': 'user', 'content': 'Nhắn tin qua Zalo cho Minh'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
+        self.assertEqual([c['name'] for c in row['tool_calls']], ['chat_ott.list_chats', 'sys.ask_missing_info'])
+        self.assertEqual(log['termination'], 'clarification')
+
+    def test_bill_payment_list_bills_arguments_cleared(self):
+        env = FakeEnv()
+        tools = [{'name': 'bill_payment.list_bills', 'kind': 'read'}]
+        decisions = iter([
+            [{'name': 'bill_payment.list_bills', 'arguments': {'type': 'electricity'}}],
+            []
+        ])
+        messages = [{'role': 'user', 'content': 'Xem tiền điện tháng này'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        self.assertEqual(row['tool_calls'][0]['arguments'], {})
+
+    def test_ungrounded_id_feedback_names_lookup_tool(self):
+        env = FakeEnv()
+        tools = [
+            {'name': 'calendar.list_events', 'kind': 'read'},
+            {'name': 'calendar.update_event', 'kind': 'write', 'parameters': {
+                'properties': {'event_id': {'type': 'string', 'x-ref': 'calendar.events'}, 'start': {'type': 'string'}}}}
+        ]
+        decisions = iter([
+            [{'name': 'calendar.update_event', 'arguments': {'event_id': 'evt_fake', 'start': '2026-11-20T09:00:00+07:00'}}],
+            []
+        ])
+        messages = [{'role': 'user', 'content': 'Dời lịch họp sang 9h'}]
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
+        self.assertEqual(row['tool_calls'], [])
+        self.assertIn('validation_error', log['trace'][0]['result'])
+        self.assertIn('calendar.list_events', log['trace'][0]['result']['validation_error'])
+
+
 if __name__ == '__main__':
     unittest.main()

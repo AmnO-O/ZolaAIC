@@ -144,12 +144,11 @@ class LocalBackend:
                  enabled=self.reuse_prompt_cache)
         prefill_started = time.monotonic()
         with self.torch.inference_mode():
-            # Deterministic SDPA on T4 can fall back to quadratic-memory math
-            # attention. Prefill in bounded query chunks while retaining KV.
-            for offset in range(reused, max(0, tokens-1), 256):
+            chunk_size = int(os.environ.get('LIFEMATE_PREFILL_CHUNK', '1024'))
+            for offset in range(reused, max(0, tokens-1), chunk_size):
                 if time.monotonic() >= end:
                     raise TimeoutError('Prompt processing deadline reached')
-                stop = min(offset+256, tokens-1)
+                stop = min(offset+chunk_size, tokens-1)
                 prefill = self.model(
                     input_ids=encoded['input_ids'][:, offset:stop],
                     attention_mask=encoded['attention_mask'][:, :stop],
