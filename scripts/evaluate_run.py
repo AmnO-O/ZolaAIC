@@ -64,10 +64,12 @@ def evaluate_target(target_path_str, train_dir='../train'):
                 sid = row.get('id')
                 stage = row.get('stage')
                 if stage == 'sample.output':
-                    preds[sid] = row.get('output', {}).get('tool_calls', [])
+                    if row.get('output') is not None:
+                        preds[sid] = row['output'].get('tool_calls', [])
                     trace_map[sid] = {
                         'elapsed_seconds': row.get('elapsed_seconds', 0.0),
-                        'termination': row.get('termination', 'finished')
+                        'termination': row.get('termination', 'finished'),
+                            'error_type': row.get('error_type')
                     }
                 elif stage == 'decision.output':
                     sample_turns[sid] = sample_turns.get(sid, 0) + 1
@@ -75,7 +77,7 @@ def evaluate_target(target_path_str, train_dir='../train'):
                     out = row.get('output', {})
                     if out.get('ok') is False:
                         blocked_samples.add(sid)
-                        blocked_turns_set.add((sid, row.get('step')))
+                        blocked_turns_set.add((sid, sample_turns.get(sid, 0)))
                         blocked_calls_count += 1
         blocked_turns_count = len(blocked_turns_set)
     else:
@@ -119,7 +121,8 @@ def evaluate_target(target_path_str, train_dir='../train'):
                     if stage == 'sample.output' and sid not in trace_map:
                         trace_map[sid] = {
                             'elapsed_seconds': row.get('elapsed_seconds', 0.0),
-                            'termination': row.get('termination', 'finished')
+                            'termination': row.get('termination', 'finished'),
+                            'error_type': row.get('error_type')
                         }
                     elif stage == 'decision.output':
                         sample_turns[sid] = sample_turns.get(sid, 0) + 1
@@ -127,7 +130,7 @@ def evaluate_target(target_path_str, train_dir='../train'):
                         out = row.get('output', {})
                         if out.get('ok') is False:
                             blocked_samples.add(sid)
-                            blocked_turns_set.add((sid, row.get('step')))
+                            blocked_turns_set.add((sid, sample_turns.get(sid, 0)))
                             blocked_calls_count += 1
             blocked_turns_count = len(blocked_turns_set)
         else:
@@ -137,7 +140,9 @@ def evaluate_target(target_path_str, train_dir='../train'):
     diag_f1_list = []
     name_f1_list = []
     latencies = []
-    timeouts_50 = 0
+    over_50 = 0
+    timeouts = 0
+    error_samples = 0
     over_30 = 0
     detailed_rows = []
 
@@ -162,8 +167,11 @@ def evaluate_target(target_path_str, train_dir='../train'):
         elapsed = trace_info.get('elapsed_seconds', 0.0)
         latencies.append(elapsed)
         termination = trace_info.get('termination', 'unknown')
-        if termination == 'error' or elapsed >= 50.0:
-            timeouts_50 += 1
+        is_timeout = termination == 'deadline' or trace_info.get('error_type') == 'TimeoutError'
+        timeouts += int(is_timeout)
+        error_samples += int(termination == 'error')
+        if elapsed >= 50.0:
+            over_50 += 1
         if elapsed >= 30.0:
             over_30 += 1
 
@@ -171,7 +179,7 @@ def evaluate_target(target_path_str, train_dir='../train'):
 
         status = "F1=1.0" if diag_f1 == 1.0 else ("PARTIAL" if diag_f1 > 0 else "ZERO")
         if termination == 'error':
-            status += " (TIMEOUT)"
+            status += " (TIMEOUT)" if is_timeout else " (ERROR)"
         if sid in blocked_samples:
             status += " [BLOCKED]"
 
@@ -180,7 +188,6 @@ def evaluate_target(target_path_str, train_dir='../train'):
         detailed_rows.append({
             'id': sid,
             'diagnostic_f1': diag_f1,
-            'official_f1': diag_f1,  # alias for backwards compatibility
             'name_f1': nm_f1,
             'pred_count': diag_metric['predicted'],
             'gold_count': diag_metric['gold'],
@@ -206,7 +213,9 @@ def evaluate_target(target_path_str, train_dir='../train'):
     print(f"Name-Only Macro Tool F1:       {macro_name_f1:.4f}")
     print(f"Mean Latency:                  {mean_latency:.2f}s (max: {max_latency:.2f}s)")
     print(f"Samples >= 30s:                {over_30}")
-    print(f"Samples Timeout (>= 50s):      {timeouts_50}")
+    print(f"Samples >= 50s:                {over_50}")
+    print(f"Actual deadline timeouts:      {timeouts}")
+    print(f"Sample errors:                 {error_samples}")
     print(f"Grounding Rejections:          {len(blocked_samples)} samples, {blocked_turns_count} turns, {blocked_calls_count} calls")
     print(f"Mean Turns / Sample:           {mean_turns:.2f}")
     print("=" * 105)
@@ -215,12 +224,13 @@ def evaluate_target(target_path_str, train_dir='../train'):
         'target': str(target_path),
         'samples': len(diag_f1_list),
         'diagnostic_macro_tool_f1': macro_diag_f1,
-        'macro_official_f1': macro_diag_f1,  # alias for backwards compatibility
         'macro_name_f1': macro_name_f1,
         'mean_latency': mean_latency,
         'max_latency': max_latency,
         'samples_ge_30s': over_30,
-        'timeouts_50s': timeouts_50,
+        'samples_ge_50s': over_50,
+        'timeouts': timeouts,
+        'error_samples': error_samples,
         'blocked_samples_count': len(blocked_samples),
         'blocked_turns_count': blocked_turns_count,
         'blocked_calls_count': blocked_calls_count,

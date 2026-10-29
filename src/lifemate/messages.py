@@ -9,6 +9,8 @@ def parse_calls(text):
         raise ValueError('Truncated tool call')
     for block in blocks:
         call = json.loads(block)
+        if not isinstance(call, dict):
+            raise ValueError('Malformed model tool call')
         args = call.get('arguments', {})
         if isinstance(args, str):
             args = json.loads(args)
@@ -26,7 +28,7 @@ def chat_messages(messages):
         if role == 'assistant':
             msg = {'role': role, 'content': original.get('text', original.get('content', ''))}
             if original.get('tool_calls'):
-                msg['tool_calls'] = [{'type': 'function', 'function': c}
+                msg['tool_calls'] = [{'type': 'function', 'function': c.get('function', c)}
                                      for c in original['tool_calls']]
             output.append(msg)
             for result in original.get('tool_results', []):

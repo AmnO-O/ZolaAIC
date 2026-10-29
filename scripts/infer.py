@@ -33,14 +33,17 @@ def main():
     parser.add_argument('--train-transcripts', action='store_true', help='Development only: use train reference transcripts instead of ASR')
     parser.add_argument('--budget-seconds',type=float,default=27,
                         help='Per-sample development budget; competition deployment still requires under 30 seconds')
-    parser.add_argument('--prompt-variant', choices=['clean'],
+    parser.add_argument('--prompt-variant', choices=['clean', 'planning'],
                         default=os.environ.get('LIFEMATE_PROMPT_VARIANT', 'clean'))
+    parser.add_argument('--max-turns', type=int, default=8, help='Bounded number of model decisions')
     args = parser.parse_args()
-    if args.prompt_variant != 'clean':
-        parser.error('Legacy prompt variants were removed; use clean or a historical commit')
+    if args.prompt_variant not in ('clean', 'planning'):
+        parser.error('Legacy prompt variants were removed; use clean/planning or a historical commit')
     os.environ['LIFEMATE_PROMPT_VARIANT'] = args.prompt_variant
     if not math.isfinite(args.budget_seconds) or args.budget_seconds <= 0:
         parser.error('--budget-seconds must be a positive finite number')
+    if args.max_turns <= 0:
+        parser.error('--max-turns must be positive')
     if args.verbose_steps and not args.step_log:
         parser.error('--verbose-steps requires --step-log')
     detail = None
@@ -108,7 +111,7 @@ def main():
                     return text
                 context_payload = clean_context_for_prompt(item['context'])
                 messages = [{'role': 'system', 'content': {
-                    'instruction': 'Fulfil the latest user request through the allowed tools. Prior history actions are already applied. Resolve dates using sample context. Ask for unresolved required information; never invent entity IDs.',
+                    'instruction': 'Fulfil the latest user request through the allowed tools. Prior history actions are already applied. Resolve relative dates and times using current_time and timezone from the provided context. Ask for unresolved required information; never invent entity IDs.',
                     'context': context_payload}}]
                 for turn in item['history']:
                     if turn['role'] == 'user':
@@ -123,7 +126,8 @@ def main():
                 tools = split.tools(item)
                 row, log = run_agent(
                     env, backend.decide, messages, tools, deadline,
-                    emit=detail.emit if detail else None)
+                    emit=detail.emit if detail else None,
+                    max_turns=args.max_turns, planning=args.prompt_variant == 'planning')
             except Exception as error:
                 # Keep the same environment and every call made before failure.
                 log = {'termination': 'error', 'error_type': type(error).__name__, 'error_message':str(error)}
@@ -146,9 +150,11 @@ def main():
                 # continue later samples, then report a non-zero process status.
                 missing_predictions += 1
                 log['missing_submission_row'] = True
-            log.update(id=item['id'], elapsed_seconds=time.monotonic()-start,budget_seconds=args.budget_seconds)
+            log.update(id=item['id'], elapsed_seconds=time.monotonic()-start,budget_seconds=args.budget_seconds,
+                       prompt_variant=args.prompt_variant, max_turns=args.max_turns)
             if detail:
-                detail.emit('sample.output', output=row, termination=log['termination'])
+                detail.emit('sample.output', output=row, termination=log['termination'],
+                            error_type=log.get('error_type'), budget_seconds=args.budget_seconds)
             logs.write(json.dumps(log, ensure_ascii=False) + '\n')
             logs.flush()
     if detail:

@@ -52,6 +52,10 @@ class Backend:
   if os.environ.get('SIMULATE_FAILURE')=='1':raise RuntimeError('invented model failure')
   assert 'REFERENCE_MUST_NOT_LEAK' not in str(messages)
   assert 'LABEL_MUST_NOT_LEAK' not in str(messages)
+  if os.environ.get('LIFEMATE_PROMPT_VARIANT')=='planning':
+   from lifemate.planning import Decision
+   if any(m['role']=='tool' for m in messages):return Decision(plan_update='No remaining work')
+   return Decision([{'name':'memo.create','arguments':{'text':'invented memo'}}], 'Create the requested memo')
   if any(m['role']=='tool' for m in messages):
    return []
   return [{'name':'memo.create','arguments':{'text':'invented memo'}}]
@@ -103,6 +107,21 @@ def create():return Backend()
             self.assertIn('sample.error',[event['stage'] for event in failure_events])
             self.assertEqual(failure_events[-1]['termination'],'error')
             self.assertEqual(failure_events[-1]['output']['tool_calls'],[])
+            planning_output = base/'planning.jsonl'
+            planning_run = subprocess.run([sys.executable, '-B', str(root/'scripts/infer.py'),
+                '--split-dir', str(split), '--backend', 'fake_backend:create', '--output', str(planning_output),
+                '--prompt-variant', 'planning', '--max-turns', '16', '--budget-seconds', '90',
+                '--step-log', str(base/'planning.steps.jsonl')],
+                env=environment, capture_output=True, text=True, timeout=20)
+            self.assertEqual(planning_run.returncode, 0, planning_run.stderr)
+            planning_row = json.loads(planning_output.read_text())
+            self.assertEqual(planning_row['tool_calls'], row['tool_calls'])
+            self.assertNotIn('plan', planning_row)
+            planning_trace = json.loads(planning_output.with_suffix('.trace.jsonl').read_text())
+            self.assertTrue(planning_trace['planning'])
+            self.assertEqual(planning_trace['budget_seconds'], 90)
+            self.assertEqual(planning_trace['max_turns'], 16)
+            self.assertEqual(len(planning_trace['plan_revisions']), 2)
             original=json.loads((split/'train.jsonl').read_text())
             (split/'train.jsonl').write_text('\n'.join(json.dumps({**original,'id':sample_id})
                 for sample_id in ('broken','good')))
@@ -118,7 +137,7 @@ def create():return Backend()
             self.assertTrue(partial_trace[0]['missing_submission_row'])
             self.assertEqual(partial_trace[0]['error_type'],'RuntimeError')
             self.assertEqual(partial_trace[1]['termination'],'finished')
-            self.assertEqual(len((base/'resets.txt').read_text().splitlines()),8)
+            self.assertEqual(len((base/'resets.txt').read_text().splitlines()),10)
 
 
 if __name__=='__main__':unittest.main()

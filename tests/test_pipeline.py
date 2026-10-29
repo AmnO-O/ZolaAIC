@@ -356,7 +356,7 @@ class PipelineTests(unittest.TestCase):
         messages = [{'role': 'user', 'content': 'Đặt xe ra sân bay'}]
         row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
         self.assertEqual(row['tool_calls'], [])
-        self.assertEqual(log['termination'], 'finished')
+        self.assertEqual(log['termination'], 'validation_failed')
         self.assertIn('validation_error', log['trace'][0]['result'])
         self.assertIn('ride_hailing.book', log['trace'][0]['result']['validation_error'])
 

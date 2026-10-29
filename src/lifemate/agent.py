@@ -2,14 +2,11 @@
 import copy
 import time
 
-from .grounding import Evidence, successful
+from .grounding import Evidence
+from .execution import ExecutionLedger
+from .planning import Decision
 
-def _failure_target(name, arguments):
-    return name, tuple(sorted((key, str(value)) for key, value in arguments.items()
-                             if key.endswith("_id") or key in ("phone", "phone_number")))
-
-
-def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None):
+def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, planning=False):
     """Exactly one supplied environment; never retry writes or replay history automatically."""
     messages = copy.deepcopy(messages)
     tools = list(tools)
@@ -19,8 +16,13 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None):
     trace = []
     reason = 'turn_limit'
     read_executed = write_executed = False
-    unresolved_failure = False
-    failed_targets = set()
+    ledger = ExecutionLedger()
+    current_plan = None
+    plan_revisions = []
+    protocol_errors = 0
+    validation_rejections = 0
+    last_batch_rejected = False
+    decisions = 0
     attempted_reads = attempted_writes = 0
 
     for _ in range(max_turns):
@@ -35,24 +37,56 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None):
         if remaining <= 0:
             reason = 'deadline'
             break
-        calls = decide(messages, tools, remaining)
+        response = decide(messages, tools, remaining)
+        decisions += 1
+        decision = response if isinstance(response, Decision) else Decision(tool_calls=response)
+        calls = decision.tool_calls
         if emit:
-            emit('decision.output', output=calls)
+            emit('decision.output', output=decision.payload() if isinstance(response, Decision) else calls)
         if time.monotonic() >= deadline:
             reason = 'deadline'
             break
         if not isinstance(calls, list) or any(
-            not isinstance(call,dict) or not isinstance(call.get('name'),str)
-            or not isinstance(call.get('arguments'),dict) for call in calls):
-            raise ValueError('Backend must return a list of valid tool calls')
-        if not calls:
-            if unresolved_failure:
-                reason = 'execution_failed'
+            not isinstance(call, dict) or not isinstance(call.get('name'), str)
+            or not isinstance(call.get('arguments'), dict) for call in calls):
+            raise ValueError('Backend must return valid native tool calls')
+        protocol_error = decision.protocol_error
+        if planning and calls and current_plan is None and not decision.plan_update:
+            protocol_error = protocol_error or 'Provide a brief initial <plan> before tool calls'
+        if protocol_error:
+            protocol_errors += 1
+            messages.append({'role': 'assistant', 'content': decision.raw_text})
+            messages.append({'role': 'user', 'content':
+                'Controller output-format error: ' + protocol_error +
+                '. Use a short <plan> when needed, then native tool calls or literal [].'})
+            if emit:
+                emit('planning.protocol_error', output={'error': protocol_error, 'executed': False})
+            if protocol_errors >= 2:
+                reason = 'protocol_error'
                 break
-            reason = 'finished'
+            continue
+        if planning and decision.plan_update:
+            current_plan = decision.plan_update
+            plan_revisions.append({'decision': decisions, 'remaining_plan': current_plan})
+            if emit:
+                emit('planning.updated', output=plan_revisions[-1])
+        if not calls:
+            if ledger.failed_targets:
+                reason = 'execution_failed'
+            elif last_batch_rejected:
+                reason = 'validation_failed'
+            else:
+                reason = 'finished'
+            if planning and decision.plan_update:
+                messages.append({'role': 'assistant', 'content': '<plan>' + current_plan + '</plan>'})
             break
         executed_batch = []
-        messages.append({'role':'assistant','tool_calls':executed_batch})
+        assistant = {'role': 'assistant', 'tool_calls': executed_batch}
+        if planning and decision.plan_update:
+            assistant['content'] = '<plan>' + current_plan + '</plan>'
+        messages.append(assistant)
+        batch_trace = []
+        last_batch_rejected = False
         clarification = False
         for original in calls:
             if time.monotonic() >= deadline:
@@ -63,6 +97,8 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None):
             error = None
             if name not in specs:
                 error = 'Tool is not permitted for this sample.'
+            if not error and ledger.duplicate_write(call, kinds.get(name)):
+                error = 'This identical write already succeeded; do not repeat a completed action.'
             if not error:
                 error = evidence.check(specs.get(name,{}),args,specs)
             check = {'ok':False,'error':error} if error else env.validate(name,args)
@@ -73,6 +109,8 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None):
                 break
             executed_batch.append(call)
             if not check['ok']:
+                validation_rejections += 1
+                last_batch_rejected = True
                 result = {'validation_error':check.get('error'),'executed':False}
             else:
                 if emit:
@@ -81,38 +119,48 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None):
                     executed_batch.pop()
                     reason = 'deadline'
                     break
-                result = env.call(name,args)
+                try:
+                    result = env.call(name, args)
+                except Exception as error:
+                    # A raised call may already have changed state. Never retry it here.
+                    result = {'execution_error': str(error), 'outcome': 'uncertain',
+                              'execution_attempted': True}
                 kind = kinds.get(name)
                 attempted_reads += kind == 'read'
                 attempted_writes += kind == 'write'
                 if emit:
                     emit('tool.output',input=call,output=result)
-                if successful(result):
-                    evidence.observe(name,result)
+                status = ledger.observe(copy.deepcopy(call), result, kind)
+                if status == 'succeeded':
+                    evidence.observe(name, result)
                     read_executed |= kind == 'read'
                     write_executed |= kind == 'write'
-                    target = _failure_target(name, args)
-                    failed_targets.discard(target)
-                else:
-                    target = _failure_target(name, args)
-                    failed_targets.add(target)
-                unresolved_failure = bool(failed_targets)
+                if status == 'uncertain' and kind not in ('read', 'meta') and name != 'sys.ask_missing_info':
+                    reason = 'uncertain_outcome'
                 # Do not continue the batch after a clarification, even if its
                 # result is unusual. It is still an actual logged meta call.
                 clarification |= name == 'sys.ask_missing_info'
             messages.append({'role':'tool','name':name,'content':result})
-            trace.append({'call':call,'result':result})
+            entry = {'call': call, 'result': result}
+            trace.append(entry)
+            batch_trace.append(entry)
             if time.monotonic() >= deadline:
                 reason = 'deadline'
                 break
-            if clarification:
+            if clarification or reason == 'uncertain_outcome':
                 break
-        if reason == 'deadline':
+        if reason in ('deadline', 'uncertain_outcome'):
             break
         if clarification:
             reason = 'clarification'
             break
+        if ledger.stagnant(batch_trace):
+            reason = 'no_progress'
+            break
     return {'tool_calls':env.get_tool_calls(),'state_hash':env.get_state_hash()}, {
         'termination':reason,'trace':trace,
+        'decisions': decisions, 'planning': planning, 'current_plan': current_plan,
+        'plan_revisions': plan_revisions, 'protocol_errors': protocol_errors,
+        'validation_rejections': validation_rejections, 'execution_ledger': ledger.records,
         'attempted_reads':attempted_reads,'attempted_writes':attempted_writes,
         'read_succeeded':read_executed,'write_succeeded':write_executed}

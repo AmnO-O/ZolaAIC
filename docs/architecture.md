@@ -5,15 +5,18 @@ full permitted tool schemas → Qwen native tool calls → allowlist, evidence a
 organiser schema validation → the same ToolEnv → observed results → next decision.
 
 An empty decision stops immediately. Clarification stops its batch. Deadlines
-and a turn limit bound execution. Failed executions remain visible; the harness
-never automatically retries writes or forces the model to continue after it stops.
+and a turn limit bound execution. Failed executions remain visible; the harness never automatically retries writes.
+Planning format errors get one bounded correction opportunity, not a tool call.
+An uncertain mutation stops the sample; repeated observations terminate without progress.
 
 | Module | Responsibility |
 | --- | --- |
 | `input_adapter`, `scripts/infer.py` | Permitted metadata/audio, one environment per sample, export actual calls/hash, failure isolation |
 | `asr`, `backend`, `prompt_cache` | Local inference, parameter/context limits, sample-scoped KV cache |
 | `messages` | Native conversation serialization and call parsing |
-| `prompts`, `prompt_assets/system.txt` | One general system instruction via Steerability SystemPrompt |
+| `prompts`, `prompt_assets/` | General system instruction and optional planning overlay via Steerability SystemPrompt |
+| `planning` | Parse brief action plans alongside native calls, with explicit stop/protocol checks |
+| `execution` | Actual success/failure/uncertainty ledger, duplicate-write and repeated-observation guards |
 | `context` | Remove redundant installed-app schema metadata from prompt context |
 | `agent` | Bounded validate/execute/observe loop |
 | `grounding` | Successful current/historical tool evidence, explicit user data and trusted context |
@@ -40,8 +43,9 @@ Tool schemas and organiser validation remain authoritative.
 
 ## Migration and limitations
 
-Use `PROMPT_MODE="system"`, `PROMPT_VARIANT="clean"`, and a 27-second internal
-budget in both notebooks. The old `continue_after_read` and `full_tools` Python
+Use `PROMPT_MODE="system"`. The public notebook uses `clean` with 27 seconds;
+the generic notebook uses `planning` with 90 seconds and 16 decisions for development.
+See [planning.md](planning.md) for the protocol and limitations. The old `continue_after_read` and `full_tools` Python
 arguments and `lifemate.routing` module are removed. Old modes/variants fail
 explicitly rather than silently selecting different experiments. Previous
 versions remain in Git history; previous measured F1 is not inherited.

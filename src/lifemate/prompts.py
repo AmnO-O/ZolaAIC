@@ -9,12 +9,15 @@ INSTRUCTION = (Path(__file__).parent / 'prompt_assets/system.txt').read_text(enc
 
 class PromptControls:
     def __init__(self, mode='system'):
-        if os.environ.get('LIFEMATE_PROMPT_VARIANT', 'clean') != 'clean':
-            raise ValueError('Legacy prompt variants were removed; use clean')
+        self.variant = os.environ.get('LIFEMATE_PROMPT_VARIANT', 'clean')
+        if self.variant not in ('clean', 'planning'):
+            raise ValueError('Use clean or planning; legacy prompt variants were removed')
         if mode not in ('baseline', 'system'):
             raise ValueError('Prompt mode must be baseline or system; legacy few-shot mode was removed')
         self.mode = mode
         if mode == 'baseline':
+            if self.variant == 'planning':
+                raise ValueError('Planning requires system prompt controls')
             return
         source = os.environ.get('LIFEMATE_STEERABILITY_PATH')
         if source is None:
@@ -23,7 +26,9 @@ class PromptControls:
             sys.path.insert(0, str(Path(source).resolve()))
         from steerability.algorithms.input_control.system_prompt.control import SystemPrompt
         self.instruction = INSTRUCTION
-        self.system = SystemPrompt(text=INSTRUCTION, mode='prepend')
+        if self.variant == "planning":
+            self.instruction += (Path(__file__).parent / "prompt_assets/planning.txt").read_text(encoding="utf-8")
+        self.system = SystemPrompt(text=self.instruction, mode='prepend')
         self.system.steer()
 
     def apply(self, messages, tools):

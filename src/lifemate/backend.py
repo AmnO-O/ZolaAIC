@@ -60,6 +60,7 @@ class LocalBackend:
             'dtype':str(next(self.model.parameters()).dtype),
             'configured_attention':self.model.config._attn_implementation,
             'deterministic_algorithms':torch.are_deterministic_algorithms_enabled()}
+        self.runtime_info['prompt_variant'] = self.prompt_controls.variant
         self.runtime_info['prompt_mode'] = prompt_mode
         self.runtime_info['prompt_sha256'] = hashlib.sha256(
             getattr(self.prompt_controls, 'instruction', '').encode('utf-8')).hexdigest()
@@ -70,7 +71,11 @@ class LocalBackend:
         self.prompt_cache.reset()
 
     def decide(self, messages, tools, remaining_seconds):
-        return parse_calls(self._generate(messages, tools, remaining_seconds))
+        text = self._generate(messages, tools, remaining_seconds)
+        if self.prompt_controls.variant == 'planning':
+            from .planning import parse_planning_response
+            return parse_planning_response(text)
+        return parse_calls(text)
 
     def _generate(self, messages, tools, remaining_seconds, max_tokens=384, controls=True, phase='llm'):
         if remaining_seconds <= 0:

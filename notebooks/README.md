@@ -6,7 +6,9 @@ To run it: import into a private Kaggle notebook, attach `amnpham/zalochallenge`
 
 The generic notebook below remains useful for small train/debug runs with full step inspection.
 
-Both notebooks use `PROMPT_MODE="system"` and `PROMPT_VARIANT="clean"`: one general prompt, no demonstrations, all permitted tools, and a 27-second internal budget. `baseline` is available only to omit system instructions for comparison. Old prompt variants, lexical pruning and continuation nudges are removed. The generic notebook retains configurable train IDs and optional diagnostic logging; the public notebook runs all public samples by default.
+Both notebooks use `PROMPT_MODE="system"`, full permitted tools, and no static few-shot examples. The generic train/debug notebook defaults to `PROMPT_VARIANT="planning"`, `BUDGET_SECONDS=90`, `MAX_TURNS=16`, with detailed logs. This is a development configuration for correctness, not a competition-compliant run. The public notebook retains `PROMPT_VARIANT="clean"`, 27 seconds and 8 decisions.
+
+For a controlled comparison, run the same train IDs twice with identical budget, decision limit, models, seeds and logging: first `PROMPT_VARIANT="clean"`, then `"planning"`. Each run gets its own directory. Planning logs initial/revised plans alongside native calls and records actual execution outcomes separately. It does not add a planner model or change submission format.
 
 Calls pass through schema/evidence validation without semantic argument rewrites. One ToolEnv is created per sample. If session creation/export fails, remaining samples continue, but the result is partial and the process exits nonzero. This new pipeline needs fresh GPU accuracy and timing measurements; previous Baseline A scores do not describe it.
 
@@ -24,10 +26,12 @@ Use `SPLIT = "public_test"` for public-test inference. Train-only scoring is ski
 
 Model downloads can take several minutes and require disk space for the roughly 8 GB FP16 LLM plus cache and dependencies. To use pre-attached model assets, set `LLM_PATH` and `ASR_PATH` to their local model directories. Those assets must match the pinned configuration. Internet is still needed for source/dependency setup unless you prepare those separately.
 
-The default sample budget is 27 seconds. A larger development budget does not satisfy the competition's 30-second requirement. Kaggle timings and diagnostic train metrics do not establish final A30 performance or the official score.
+The runner/public-test default budget is 27 seconds; the generic planning-development notebook uses 90 seconds. A larger development budget does not satisfy the competition's 30-second requirement. Kaggle timings and diagnostic train metrics do not establish final A30 performance or the official score.
 
 `PROMPT_CACHE = True` enables within-sample prompt KV reuse in the Transformers backend. Set it to false to compare full prompt processing. The cache resets for every query. Inspect `llm.cache` events for `cached_tokens` and `fresh_tokens`, and `llm.output` for `prefill_seconds` and `generation_seconds`.
 
 Detailed query tracing is enabled by default with `STEP_LOGGING = True`. With `LIVE_STEPS = True`, live output and `inference.log` include each stage's full inputs and outputs as formatted JSON. `steps.jsonl` stores full inputs/outputs, and the final notebook cell displays expandable steps for a selected `QUERY_ID`. Logs include context, transcripts, the rendered LLM prompt, generated tool-call text, validation, tool results, and final predictions. They contain observed data and generated output, not hidden model reasoning. Keep them private. Disable logging for performance measurements because writing full prompts adds overhead.
 
 After importing the updated notebook, restart the Kaggle session and run from the first cell. The setup supports `REVISION="main"` or an exact commit and rejects source versions that predate the clean pipeline.
+
+See [planning protocol and stopping rules](../docs/planning.md) before interpreting `finished`, `no_progress`, `protocol_error`, or `uncertain_outcome`. A clean plan or a normal loop exit does not prove task completion.

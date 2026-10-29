@@ -6,14 +6,15 @@ Audio and conversation history → local ASR → controlled LLM tool calls → o
 
 Runtime responsibilities, compatibility guarantees, and remaining semantic
 heuristics are documented in [the architecture guide](docs/architecture.md).
-The single general prompt lives in `src/lifemate/prompt_assets/system.txt`.
+The general prompt lives in `src/lifemate/prompt_assets/system.txt`; optional
+planning instructions live in `planning.txt`. See [planning development](docs/planning.md).
 Validation uses schemas and observed evidence; it does not rewrite intent.
 
 For Kaggle, import [notebooks/kaggle_pipeline.ipynb](notebooks/kaggle_pipeline.ipynb) and follow the [notebook instructions](notebooks/README.md). It clones this repository, prepares models, and runs on your attached dataset.
 
 To generate a complete public-test submission, use [notebooks/kaggle_public_test.ipynb](notebooks/kaggle_public_test.ipynb). It runs all public audio samples, reports progress, and validates complete coverage/structure before exporting `result/submission.jsonl` for manual submission. It does not access train labels, compute public-test accuracy, or submit automatically.
 
-The pipeline uses one bounded observe-act controller: the model may return several independent tool calls per decision, and the loop stops on an empty decision, a clarification request, eight decisions, or the deadline. There is no separate planner model. Every decision receives the full permitted schemas. Keyword routing, continuation nudges and task-specific argument rewriting have been removed.
+The pipeline uses one bounded observe-act controller: the model may return several independent tool calls per decision, and the loop stops on an empty decision, a clarification request, a configurable decision limit (eight by default), or the deadline. There is no separate planner model. The optional `planning` variant produces a brief initial action plan alongside native calls and revises remaining work only when observations require it. Every decision receives the full permitted schemas. Keyword routing, continuation nudges and task-specific argument rewriting have been removed.
 
 The controller passes proposed arguments unchanged after allowlist, evidence and organiser schema validation. It grounds IDs and phone numbers in successful observations or explicit user data. The model resolves dates, addresses, conditions and multi-action intent from the supplied context and tools. The harness does not infer branch outcomes, append event end times, rewrite destinations, or choose payment sources. This is not a guarantee of semantic correctness.
 
@@ -57,6 +58,11 @@ Session/export failures are isolated per sample, with no retry or fabricated sta
 For development, add `--step-log result/steps.jsonl --verbose-steps` to save every query's observed processing inputs/outputs and print full step inputs/outputs live. The notebook enables this by default and provides an expandable query viewer. Full prompts, tool responses, and context remain in this separate private diagnostic file; the submission schema stays unchanged. Disable detailed logging when measuring runtime.
 
 ## Development
+
+The generic Kaggle notebook defaults to `PROMPT_VARIANT="planning"`, 90 seconds
+and 16 decisions for robustness experiments. This development budget is not
+competition compliant. The runner and public notebook retain `clean`/27-second
+defaults. Compare clean and planning on identical train IDs and settings.
 
 ```bash
 python -B -m unittest discover -s tests -v
