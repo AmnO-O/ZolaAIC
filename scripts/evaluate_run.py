@@ -82,7 +82,14 @@ def evaluate_target(target_path_str, train_dir='../train'):
         run_name = target_path.name
         summary_out_dir = target_path
         submission_path = target_path / 'submission.jsonl'
-        trace_path = target_path / 'trace.jsonl'
+        trace_candidates = [
+            target_path / 'trace.jsonl',
+            target_path / 'submission.trace.jsonl',
+            target_path / 'submission.jsonl.trace.jsonl',
+            target_path / 'text_submission.trace.jsonl',
+            target_path / 'audio_submission.trace.jsonl',
+        ]
+        trace_path = next((p for p in trace_candidates if p.exists()), None)
         steps_path = target_path / 'steps.jsonl'
 
         if not submission_path.exists():
@@ -94,7 +101,7 @@ def evaluate_target(target_path_str, train_dir='../train'):
                     row = json.loads(line)
                     preds[row['id']] = row.get('tool_calls', [])
 
-        if trace_path.exists():
+        if trace_path is not None and trace_path.exists():
             with open(trace_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     if line.strip():
@@ -109,7 +116,12 @@ def evaluate_target(target_path_str, train_dir='../train'):
                     row = json.loads(line)
                     sid = row.get('id')
                     stage = row.get('stage')
-                    if stage == 'decision.output':
+                    if stage == 'sample.output' and sid not in trace_map:
+                        trace_map[sid] = {
+                            'elapsed_seconds': row.get('elapsed_seconds', 0.0),
+                            'termination': row.get('termination', 'finished')
+                        }
+                    elif stage == 'decision.output':
                         sample_turns[sid] = sample_turns.get(sid, 0) + 1
                     elif stage == 'tool.validation':
                         out = row.get('output', {})
