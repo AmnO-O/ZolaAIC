@@ -16,10 +16,16 @@
     "parameters_source": "publisher config.json",
     "precision": "int8",
     "num_threads": 4,
-    "files": ["config.json", "tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx"]
+    "files": [
+      "config.json",
+      "tokens.txt",
+      "encoder.int8.onnx",
+      "decoder.int8.onnx",
+      "joiner.int8.onnx"
+    ]
   },
-  "prompt_mode": "steerability",
+  "prompt_mode": "system",
   "seed": 42,
   "sample_budget_seconds": 27,
-  "status": "Gipformer and frozen message-level prompt controls; deployment validation pending"
+  "status": "General system prompt and schema/evidence harness; new GPU evaluation required"
 }

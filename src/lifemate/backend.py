@@ -1,49 +1,16 @@
 """Local Transformers baseline. All inference assets must already exist locally."""
-import json
 import os
 import random
-import re
 import time
 
 
-def parse_calls(text):
-    calls = []
-    blocks = re.findall(r'<tool_call>\s*(.*?)\s*</tool_call>', text, re.S)
-    if text.count('<tool_call>')!=text.count('</tool_call>') or ('<tool_call>' in text and not blocks):
-        raise ValueError('Truncated tool call')
-    for block in blocks:
-        call = json.loads(block)
-        args = call.get('arguments', {})
-        if isinstance(args, str):
-            args = json.loads(args)
-        if not isinstance(call.get('name'), str) or not isinstance(args, dict):
-            raise ValueError('Malformed model tool call')
-        calls.append({'name': call['name'], 'arguments': args})
-    return calls
-
-
-def chat_messages(messages):
-    """Normalize internal and historical turns into the native Qwen template."""
-    output = []
-    for original in messages:
-        role = original['role']
-        if role == 'assistant':
-            msg = {'role': role, 'content': original.get('text', original.get('content', ''))}
-            if original.get('tool_calls'):
-                msg['tool_calls'] = [{'type': 'function', 'function': c}
-                                     for c in original['tool_calls']]
-            output.append(msg)
-            for result in original.get('tool_results', []):
-                output.append({'role': 'tool', 'content': json.dumps(result, ensure_ascii=False)})
-        else:
-            content = original.get('content', '')
-            output.append({'role': role, 'content': content if isinstance(content, str)
-                           else json.dumps(content, ensure_ascii=False)})
-    return output
+from .messages import parse_calls, chat_messages
 
 
 class LocalBackend:
-    def __init__(self, llm_path, asr_path=None, device='cuda:0', prompt_mode='steerability', asr_kind='gipformer'):
+    def __init__(self, llm_path, asr_path=None, device='cuda:0', prompt_mode='system', asr_kind='gipformer'):
+        if asr_kind != 'gipformer':
+            raise ValueError('Only the configured Gipformer ASR is supported')
         os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
         import numpy as np
         import torch
@@ -70,36 +37,32 @@ class LocalBackend:
         self.llm_parameters = sum(p.numel() for p in self.model.parameters())
         if self.llm_parameters >= 5_000_000_000:
             raise ValueError('LLM exceeds competition parameter limit')
-        self.asr = self.processor = None
+        self.asr = None
         self.asr_parameters = 0
         if asr_path:
-            if asr_kind=='gipformer':
-                from .asr import GipformerASR
-                self.asr=GipformerASR(asr_path,precision=os.environ.get('LIFEMATE_ASR_PRECISION','int8'),
-                    num_threads=int(os.environ.get('LIFEMATE_ASR_THREADS','4')))
-                self.asr_parameters=self.asr.parameters
-            elif asr_kind=='whisper':
-                from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
-                self.processor = AutoProcessor.from_pretrained(asr_path, local_files_only=True)
-                self.asr = AutoModelForSpeechSeq2Seq.from_pretrained(
-                    asr_path, local_files_only=True, torch_dtype=torch.float16).to(device).eval()
-                self.asr_parameters = sum(p.numel() for p in self.asr.parameters())
-            else:raise ValueError('Unknown ASR kind')
+            from .asr import GipformerASR
+            self.asr = GipformerASR(
+                asr_path, precision=os.environ.get('LIFEMATE_ASR_PRECISION', 'int8'),
+                num_threads=int(os.environ.get('LIFEMATE_ASR_THREADS', '4')))
+            self.asr_parameters = self.asr.parameters
         if self.llm_parameters + self.asr_parameters >= 6_000_000_000:
             raise ValueError('Combined models exceed parameter limit')
         self.stats = []
         from .prompts import PromptControls
         self.prompt_controls=PromptControls(prompt_mode)
-        self.asr_kind=asr_kind
         from .prompt_cache import PromptCache
         self.prompt_cache = PromptCache()
         self.reuse_prompt_cache = os.environ.get('LIFEMATE_PROMPT_CACHE', '1') == '1'
         import transformers
+        import hashlib
         self.runtime_info = {'torch':torch.__version__,'transformers':transformers.__version__,
             'cuda':torch.version.cuda,'device':str(next(self.model.parameters()).device),
             'dtype':str(next(self.model.parameters()).dtype),
             'configured_attention':self.model.config._attn_implementation,
             'deterministic_algorithms':torch.are_deterministic_algorithms_enabled()}
+        self.runtime_info['prompt_mode'] = prompt_mode
+        self.runtime_info['prompt_sha256'] = hashlib.sha256(
+            getattr(self.prompt_controls, 'instruction', '').encode('utf-8')).hexdigest()
         if str(device).startswith('cuda'):
             self.runtime_info['gpu'] = torch.cuda.get_device_name(device)
 
@@ -187,51 +150,10 @@ class LocalBackend:
     def transcribe(self, path, remaining_seconds):
         if self.asr is None:
             raise RuntimeError('No local ASR model configured')
-        if self.asr_kind=='gipformer':
-            return self.asr.transcribe(path,remaining_seconds)
-        from transformers import StoppingCriteria, StoppingCriteriaList
-        import soundfile as sf
-        import numpy as np
-        from scipy.signal import resample_poly
-        from math import gcd
-        if remaining_seconds <= 0:
-            raise TimeoutError('No ASR budget')
-        end = time.monotonic() + remaining_seconds
-
-        class Deadline(StoppingCriteria):
-            def __call__(self, input_ids, scores, **kwargs):
-                return time.monotonic() >= end
-
-        audio, rate = sf.read(path, dtype='float32')
-        if audio.ndim == 2:
-            audio = audio.mean(axis=1)
-        if rate != 16000:
-            factor = gcd(rate, 16000)
-            audio = resample_poly(audio, 16000//factor, rate//factor)
-        if not len(audio) or not np.isfinite(audio).all():
-            raise ValueError('Invalid audio')
-        # Exact digital silence contains no speech. Avoid Whisper hallucinations
-        # without introducing a learned VAD or rejecting quiet real recordings.
-        if np.max(np.abs(audio)) == 0:
-            return ''
-        texts = []
-        for start in range(0, len(audio), 30*16000):
-            if time.monotonic() >= end:
-                raise TimeoutError('ASR deadline reached')
-            batch = self.processor(audio[start:start+30*16000], sampling_rate=16000,
-                                   return_tensors='pt')
-            features = batch.input_features.to(self.device, dtype=self.torch.float16)
-            with self.torch.inference_mode():
-                ids = self.asr.generate(input_features=features, language='vi', task='transcribe',
-                                        do_sample=False, max_new_tokens=256,
-                                        stopping_criteria=StoppingCriteriaList([Deadline()]))
-            texts.append(self.processor.batch_decode(ids, skip_special_tokens=True)[0])
-        if time.monotonic() >= end:
-            raise TimeoutError('ASR deadline reached')
-        return ' '.join(texts).strip()
+        return self.asr.transcribe(path, remaining_seconds)
 
 
 def create_backend():
     return LocalBackend(os.environ['LIFEMATE_LLM_PATH'], os.environ.get('LIFEMATE_ASR_PATH'),
-        prompt_mode=os.environ.get('LIFEMATE_PROMPT_MODE','steerability'),
+        prompt_mode=os.environ.get('LIFEMATE_PROMPT_MODE','system'),
         asr_kind=os.environ.get('LIFEMATE_ASR_KIND','gipformer'))

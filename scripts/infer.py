@@ -15,9 +15,9 @@ import math
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from lifemate.agent import run_agent
-from lifemate.grounding import extract_spoken_phones
+from lifemate.values import annotate_spoken_phones
 from lifemate.input_adapter import SplitInput
-from lifemate.routing import SafeToolRouter, clean_context_for_prompt
+from lifemate.context import clean_context_for_prompt
 from lifemate.step_log import StepLog
 
 
@@ -33,12 +33,12 @@ def main():
     parser.add_argument('--train-transcripts', action='store_true', help='Development only: use train reference transcripts instead of ASR')
     parser.add_argument('--budget-seconds',type=float,default=27,
                         help='Per-sample development budget; competition deployment still requires under 30 seconds')
-    parser.add_argument('--prompt-variant', choices=['a', 'b_id', 'b_cond', 'b_cond2', 'b_combined'],
-                        default=os.environ.get('LIFEMATE_PROMPT_VARIANT', 'a'),
-                        help='Prompt invariant variant: a (baseline), b_id (grounded ID rule), b_cond (condition polarity), b_cond2 (reschedule grounded), b_combined (both)')
+    parser.add_argument('--prompt-variant', choices=['clean'],
+                        default=os.environ.get('LIFEMATE_PROMPT_VARIANT', 'clean'))
     args = parser.parse_args()
-    if args.prompt_variant:
-        os.environ['LIFEMATE_PROMPT_VARIANT'] = args.prompt_variant
+    if args.prompt_variant != 'clean':
+        parser.error('Legacy prompt variants were removed; use clean or a historical commit')
+    os.environ['LIFEMATE_PROMPT_VARIANT'] = args.prompt_variant
     if not math.isfinite(args.budget_seconds) or args.budget_seconds <= 0:
         parser.error('--budget-seconds must be a positive finite number')
     if args.verbose_steps and not args.step_log:
@@ -110,43 +110,20 @@ def main():
                 messages = [{'role': 'system', 'content': {
                     'instruction': 'Fulfil the latest user request through the allowed tools. Prior history actions are already applied. Resolve dates using sample context. Ask for unresolved required information; never invent entity IDs.',
                     'context': context_payload}}]
-                all_text = []
                 for turn in item['history']:
                     if turn['role'] == 'user':
                         text = transcribe_logged(turn['audio'], 'history')
-                        all_text.append(text)
-                        spoken = extract_spoken_phones(text)
-                        content = text
-                        if spoken:
-                            content += '\n' + '\n'.join(
-                                f"[recognized_phone: {p['recognized_phone']} from '{p['source_text']}']"
-                                for p in spoken
-                            )
+                        content = annotate_spoken_phones(text)
                         messages.append({'role': 'user', 'content': content})
                     else:
                         messages.append(turn)
                 text = transcribe_logged(item['audio'], 'latest')
-                all_text.append(text)
-                spoken = extract_spoken_phones(text)
-                content = text
-                if spoken:
-                    content += '\n' + '\n'.join(
-                        f"[recognized_phone: {p['recognized_phone']} from '{p['source_text']}']"
-                        for p in spoken
-                    )
+                content = annotate_spoken_phones(text)
                 messages.append({'role': 'user', 'content': content})
-                all_spoken = extract_spoken_phones(' '.join(all_text))
-                if all_spoken:
-                    context_payload['spoken_phones'] = all_spoken
                 tools = split.tools(item)
-                pruned_tools = SafeToolRouter(tools).route(
-                    ' '.join(all_text),
-                    enabled=os.environ.get('LIFEMATE_TOOL_PRUNING', '0') == '1'
-                )
-                row, log = run_agent(env, backend.decide, messages, pruned_tools, deadline,
-                                     emit=detail.emit if detail else None,
-                                     continue_after_read=os.environ.get('LIFEMATE_CONTINUE_AFTER_READ','1')=='1',
-                                     full_tools=tools)
+                row, log = run_agent(
+                    env, backend.decide, messages, tools, deadline,
+                    emit=detail.emit if detail else None)
             except Exception as error:
                 # Keep the same environment and every call made before failure.
                 log = {'termination': 'error', 'error_type': type(error).__name__, 'error_message':str(error)}

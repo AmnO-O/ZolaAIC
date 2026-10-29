@@ -58,7 +58,7 @@ class PipelineTests(unittest.TestCase):
         env = FakeEnv()
         decisions = iter([[{'name': 'bad', 'arguments': {}}],
                           [{'name': 'valid', 'arguments': {}}], []])
-        row, log = run_agent(env, lambda *_: next(decisions), [], [], time.monotonic()+5)
+        row, log = run_agent(env, lambda *_: next(decisions), [], [{'name': 'bad'}, {'name': 'valid'}], time.monotonic()+5)
         self.assertEqual([c['name'] for c in row['tool_calls']], ['valid'])
         self.assertEqual(log['termination'], 'finished')
 
@@ -67,12 +67,12 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(row['tool_calls'], [])
         self.assertEqual(log['termination'], 'deadline')
 
-    def test_continue_after_read_reminds_when_empty_after_read(self):
+    def test_empty_decision_stops_after_read(self):
         env = FakeEnv()
         decisions = iter([read(), [], write(), []])
-        row, log = run_agent(env, lambda *_: next(decisions), [], TOOLS, time.monotonic() + 5, continue_after_read=True)
-        self.assertEqual([c['name'] for c in row['tool_calls']], ['weather.get_forecast', 'calendar.update_event'])
-        self.assertTrue(log['continued_after_read'])
+        row, log = run_agent(env, lambda *_: next(decisions), [], TOOLS, time.monotonic() + 5)
+        self.assertEqual([c['name'] for c in row['tool_calls']], ['weather.get_forecast'])
+        self.assertEqual(log['termination'], 'finished')
         self.assertEqual(log['termination'], 'finished')
 
     def test_batched_reads_execute_and_count_as_read_executed(self):
@@ -87,20 +87,20 @@ class PipelineTests(unittest.TestCase):
         self.assertIn('sms.send', names)
         self.assertEqual(log['termination'], 'finished')
         # No spurious reminder when write did execute
-        self.assertFalse(log['continued_after_read'])
+        self.assertNotIn('continued_after_read', log)
 
-    def test_batched_reads_trigger_remind_if_no_write_follows(self):
-        """Multi-read batch with no subsequent write should trigger the continue reminder."""
+    def test_empty_decision_stops_after_batched_reads(self):
+        """An explicit model stop ends the loop without a forced write."""
         env = FakeEnv()
         decisions = iter([multi_read(), [], write(), []])
-        row, log = run_agent(env, lambda *_: next(decisions), [], TOOLS, time.monotonic() + 5, continue_after_read=True)
-        self.assertTrue(log['continued_after_read'])
-        self.assertIn('calendar.update_event', [c['name'] for c in row['tool_calls']])
+        row, log = run_agent(env, lambda *_: next(decisions), [], TOOLS, time.monotonic() + 5)
+        self.assertEqual(log['termination'], 'finished')
+        self.assertNotIn('calendar.update_event', [c['name'] for c in row['tool_calls']])
 
     def test_clarification_stops_remaining_batch(self):
         env=FakeEnv()
         row,log=run_agent(env,lambda *_:[{'name':'sys.ask_missing_info','arguments':{'tool_name':'a.b','params':['id']}},
-                                       {'name':'must_not_execute','arguments':{}}],[],[],time.monotonic()+5)
+                                       {'name':'must_not_execute','arguments':{}}],[],[{'name':'sys.ask_missing_info'}, {'name':'a.b'}],time.monotonic()+5)
         self.assertEqual([c['name'] for c in row['tool_calls']],['sys.ask_missing_info'])
         self.assertEqual(log['termination'],'clarification')
 
@@ -124,7 +124,7 @@ class PipelineTests(unittest.TestCase):
         decisions = iter([[{'name': 'weather.get_forecast', 'arguments': {'date': '2026-11-29', 'location': 'Đà Nẵng'}}], []])
         # User message did NOT mention Đà Nẵng
         messages = [{'role': 'user', 'content': 'Nếu mai mưa thì thôi'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5)
         self.assertEqual(len(row['tool_calls']), 1)
         self.assertEqual(row['tool_calls'][0]['arguments'], {'date': '2026-11-29', 'location': 'Đà Nẵng'})
 
@@ -136,14 +136,14 @@ class PipelineTests(unittest.TestCase):
             {'role': 'system', 'content': {'context': {'current_time': '2026-11-20T15:30:00+07:00'}}},
             {'role': 'user', 'content': 'Xem giúp mai có mưa không'}
         ]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5)
         self.assertEqual(row['tool_calls'][0]['arguments']['date'], '2026-11-21')
 
     def test_calendar_lookup_filters_are_preserved(self):
         env = FakeEnv()
         decisions = iter([[{'name': 'calendar.list_events', 'arguments': {'date_from': '2026-11-29', 'date_to': '2026-11-29'}}], []])
         messages = [{'role': 'user', 'content': 'Nếu mai mưa thì dời chạy bộ muộn 1 tiếng'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5)
         self.assertEqual(len(row['tool_calls']), 1)
         self.assertEqual(row['tool_calls'][0]['arguments'], {'date_from': '2026-11-29', 'date_to': '2026-11-29'})
 
@@ -151,7 +151,7 @@ class PipelineTests(unittest.TestCase):
         env = FakeEnv()
         decisions = iter([[{'name': 'calendar.list_events', 'arguments': {'date_from': '2026-11-29', 'date_to': '2026-11-29'}}], []])
         messages = [{'role': 'user', 'content': 'Xem lịch hôm nay giúp tôi'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5)
         self.assertEqual(len(row['tool_calls']), 1)
         self.assertEqual(row['tool_calls'][0]['arguments'], {'date_from': '2026-11-29', 'date_to': '2026-11-29'})
 
@@ -167,7 +167,7 @@ class PipelineTests(unittest.TestCase):
             []
         ])
         messages = [{'role': 'user', 'content': 'Nhắn xếp Dũng giờ mới'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
         self.assertEqual(row['tool_calls'][0]['arguments']['query'], 'Xếp Dũng')
         self.assertEqual(row['tool_calls'][1]['arguments']['query'], 'xếp dựng')
         self.assertEqual(row['tool_calls'][2]['arguments']['query'], 'Sếp dung')
@@ -179,7 +179,7 @@ class PipelineTests(unittest.TestCase):
         tools = [{'name': 'smart_home.get_status', 'kind': 'read'}]
         decisions = iter([[{'name': 'smart_home.get_status', 'arguments': {'room': 'phòng ngủ', 'type': 'light'}}], []])
         messages = [{'role': 'user', 'content': 'Giảm độ sáng đèn phòng ngủ nhỏ xuống còn 50'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
         self.assertEqual(row['tool_calls'][0]['arguments'], {'room': 'phòng ngủ', 'type': 'light'})
 
     def test_model_spoken_amount_is_preserved(self):
@@ -187,7 +187,7 @@ class PipelineTests(unittest.TestCase):
         tools = [{'name': 'ewallet.topup_mobile', 'kind': 'write'}]
         decisions = iter([[{'name': 'ewallet.topup_mobile', 'arguments': {'phone': '0912345678', 'amount': 50000}}], []])
         messages = [{'role': 'user', 'content': 'Nạp giúp mình năm mươi ngàn tiền điện thoại 0912345678'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
         self.assertEqual(row['tool_calls'][0]['arguments']['amount'], 50000)
 
     def test_bill_transfer_amount_from_observation_is_preserved(self):
@@ -206,12 +206,12 @@ class PipelineTests(unittest.TestCase):
             []
         ])
         messages = [{'role': 'user', 'content': 'Chuyển tiền điện tháng này tới số 0912345678'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
         transfer_call = [c for c in row['tool_calls'] if c['name'] == 'ewallet.transfer'][0]
         self.assertEqual(transfer_call['arguments']['amount'], 845000)
         self.assertNotIn('note', transfer_call['arguments'])
 
-    def test_bill_transfer_without_bill_lookup_is_intercepted(self):
+    def test_controller_does_not_infer_bill_dependencies_from_words(self):
         env = FakeEnv()
         tools = [{'name': 'bill_payment.list_bills', 'kind': 'read'}, {'name': 'ewallet.transfer', 'kind': 'write'}]
         decisions = iter([
@@ -219,11 +219,11 @@ class PipelineTests(unittest.TestCase):
             []
         ])
         messages = [{'role': 'user', 'content': 'Chuyển tiền điện tháng này tới số 0912345678'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
-        self.assertEqual(row['tool_calls'], [])
-        self.assertIn('validation_error', log['trace'][0]['result'])
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
+        self.assertEqual(len(row['tool_calls']), 1)
+        self.assertEqual(row['tool_calls'][0]['arguments']['amount'], 50000)
 
-    def test_calendar_update_event_computes_end_time_from_duration(self):
+    def test_calendar_update_does_not_inject_end_time(self):
         class CalendarEnv(FakeEnv):
             def call(self, name, args):
                 super().call(name, args)
@@ -238,25 +238,24 @@ class PipelineTests(unittest.TestCase):
             []
         ])
         messages = [{'role': 'user', 'content': 'Dời chạy bộ muộn 1 tiếng'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, TOOLS, time.monotonic() + 5)
         update_call = [c for c in row['tool_calls'] if c['name'] == 'calendar.update_event'][0]
-        self.assertEqual(update_call['arguments']['end'], '2026-11-29T10:00:00+07:00')
+        self.assertNotIn('end', update_call['arguments'])
 
     def test_fabricated_phone_number_is_rejected(self):
         env = FakeEnv()
         tools = [{'name': 'ewallet.topup_mobile', 'kind': 'write'}]
         decisions = iter([[{'name': 'ewallet.topup_mobile', 'arguments': {'phone': '0901234567', 'amount': 50000}}], []])
         messages = [{'role': 'user', 'content': 'Nạp 50k cho bác Ba'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
         self.assertEqual(row['tool_calls'], [])
         self.assertIn('validation_error', log['trace'][0]['result'])
 
-    def test_multi_action_incomplete_triggers_reminder(self):
+    def test_controller_does_not_infer_notifications_from_keywords(self):
         env = FakeEnv()
         # Turn 1: write calendar.update_event
         # Turn 2: empty (model thinks it's done, but hasn't sent sms)
-        # Turn 3: after reminder, calls sms.send
-        # Turn 4: empty (finished)
+        # The controller respects the empty decision; no keyword reminder is injected.
         def mock_decide(msgs, tools, remaining):
             last_msg = msgs[-1]
             if last_msg.get('role') == 'user' and 'requested message/notification' in str(last_msg.get('content', '')):
@@ -268,9 +267,9 @@ class PipelineTests(unittest.TestCase):
         messages = [{'role': 'user', 'content': 'Dời lịch chạy bộ và nhắn tin cho Dũng nhé'}]
         row, log = run_agent(env, mock_decide, messages, TOOLS, time.monotonic() + 5)
         called_names = [c['name'] for c in row['tool_calls']]
-        self.assertEqual(called_names, ['calendar.update_event', 'sms.send'])
+        self.assertEqual(called_names, ['calendar.update_event'])
 
-    def test_ride_hailing_resolves_work_and_event_addresses(self):
+    def test_controller_does_not_rewrite_ride_arguments(self):
         class RideEnv(FakeEnv):
             def call(self, name, args):
                 super().call(name, args)
@@ -289,10 +288,10 @@ class PipelineTests(unittest.TestCase):
             {'role': 'system', 'content': {'context': {'user_profile': {'work_address': 'Khu Công nghệ cao, TP.HCM'}}}},
             {'role': 'user', 'content': 'Đặt xe bốn chỗ từ công ty đi họp phụ huynh'}
         ]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
         book_call = [c for c in row['tool_calls'] if c['name'] == 'ride_hailing.book'][0]
-        self.assertEqual(book_call['arguments']['pickup'], 'Khu Công nghệ cao, TP.HCM')
-        self.assertEqual(book_call['arguments']['dropoff'], 'Trường TH Nguyễn Bỉnh Khiêm, Quận 1')
+        self.assertEqual(book_call['arguments']['pickup'], 'công ty')
+        self.assertEqual(book_call['arguments']['dropoff'], 'họp phụ huynh')
         self.assertNotIn('payment', book_call['arguments'])
 
     def test_ride_hailing_preserves_requested_quote_and_booking(self):
@@ -304,7 +303,7 @@ class PipelineTests(unittest.TestCase):
             []
         ])
         messages = [{'role': 'user', 'content': 'Lấy báo giá và đặt xe giúp tôi'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
         self.assertEqual([c['name'] for c in row['tool_calls']], ['ride_hailing.get_quotes', 'ride_hailing.book'])
 
     def test_transfer_observed_contact_id_is_preserved(self):
@@ -323,7 +322,7 @@ class PipelineTests(unittest.TestCase):
             []
         ])
         messages = [{'role': 'user', 'content': 'Chuyển ví cho cô Mai tiền điện tháng này nhé'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
         transfer_call = [c for c in row['tool_calls'] if c['name'] == 'ewallet.transfer'][0]
         self.assertEqual(transfer_call['arguments']['contact_id'], 'c_06')
 
@@ -367,7 +366,7 @@ class PipelineTests(unittest.TestCase):
             {'name': 'sys.ask_missing_info', 'kind': 'meta'},
             {'name': 'chat_ott.list_chats', 'kind': 'read'},
             {'name': 'chat_ott.send_message', 'kind': 'write', 'parameters': {
-                'properties': {'chat_id': {'type': 'string', 'x-ref': 'chat_ott.chats'}, 'content': {'type': 'string'}}}}
+                'properties': {'chat_id': {'type': 'string', 'x-ref': 'chat_ott.chats', 'description': 'ID from chat_ott.list_chats'}, 'content': {'type': 'string'}}}}
         ]
         decisions = iter([
             [{'name': 'sys.ask_missing_info', 'arguments': {'tool_name': 'chat_ott.send_message', 'params': ['chat_id']}}],
@@ -392,7 +391,7 @@ class PipelineTests(unittest.TestCase):
             {'name': 'sys.ask_missing_info', 'kind': 'meta'},
             {'name': 'chat_ott.list_chats', 'kind': 'read'},
             {'name': 'chat_ott.send_message', 'kind': 'write', 'parameters': {
-                'properties': {'chat_id': {'type': 'string', 'x-ref': 'chat_ott.chats'}, 'content': {'type': 'string'}}}}
+                'properties': {'chat_id': {'type': 'string', 'x-ref': 'chat_ott.chats', 'description': 'ID from chat_ott.list_chats'}, 'content': {'type': 'string'}}}}
         ]
         decisions = iter([
             [{'name': 'chat_ott.list_chats', 'arguments': {}}],
@@ -403,7 +402,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([c['name'] for c in row['tool_calls']], ['chat_ott.list_chats', 'sys.ask_missing_info'])
         self.assertEqual(log['termination'], 'clarification')
 
-    def test_bill_payment_list_bills_arguments_cleared(self):
+    def test_bill_payment_list_bills_filters_preserved(self):
         env = FakeEnv()
         tools = [{'name': 'bill_payment.list_bills', 'kind': 'read'}]
         decisions = iter([
@@ -411,15 +410,15 @@ class PipelineTests(unittest.TestCase):
             []
         ])
         messages = [{'role': 'user', 'content': 'Xem tiền điện tháng này'}]
-        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5, continue_after_read=False)
-        self.assertEqual(row['tool_calls'][0]['arguments'], {})
+        row, log = run_agent(env, lambda *_: next(decisions), messages, tools, time.monotonic() + 5)
+        self.assertEqual(row['tool_calls'][0]['arguments'], {'type': 'electricity'})
 
     def test_ungrounded_id_feedback_names_lookup_tool(self):
         env = FakeEnv()
         tools = [
             {'name': 'calendar.list_events', 'kind': 'read'},
             {'name': 'calendar.update_event', 'kind': 'write', 'parameters': {
-                'properties': {'event_id': {'type': 'string', 'x-ref': 'calendar.events'}, 'start': {'type': 'string'}}}}
+                'properties': {'event_id': {'type': 'string', 'x-ref': 'calendar.events', 'description': 'ID from calendar.list_events'}, 'start': {'type': 'string'}}}}
         ]
         decisions = iter([
             [{'name': 'calendar.update_event', 'arguments': {'event_id': 'evt_fake', 'start': '2026-11-20T09:00:00+07:00'}}],

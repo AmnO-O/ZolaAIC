@@ -6,9 +6,9 @@ To run it: import into a private Kaggle notebook, attach `amnpham/zalochallenge`
 
 The generic notebook below remains useful for small train/debug runs with full step inspection.
 
-The notebook uses the single bounded observe-act controller, with `PROMPT_MODE="steerability"` and `TOOL_PRUNING=False`. Use `PROMPT_MODE="system"` for an ablation without demonstrations. Keep these settings and `BUDGET_SECONDS` fixed across comparisons. The checked-in `LIMIT=1` is a small debug run, not a representative benchmark.
+Both notebooks use `PROMPT_MODE="system"` and `PROMPT_VARIANT="clean"`: one general prompt, no demonstrations, all permitted tools, and a 27-second internal budget. `baseline` is available only to omit system instructions for comparison. Old prompt variants, lexical pruning and continuation nudges are removed. The generic notebook retains configurable train IDs and optional diagnostic logging; the public notebook runs all public samples by default.
 
-The controller preserves explicit call values and filters, reuses actual historical evidence, and distinguishes attempted from successful execution. With pruning enabled experimentally, it expands to full schemas before an empty decision can finish or when an omitted permitted tool is proposed. No additional ToolEnv is created. If session creation/export fails, other samples continue, but that row is omitted rather than given a fake hash; the process ultimately exits nonzero and the file is partial. Inspect the trace before using it.
+Calls pass through schema/evidence validation without semantic argument rewrites. One ToolEnv is created per sample. If session creation/export fails, remaining samples continue, but the result is partial and the process exits nonzero. This new pipeline needs fresh GPU accuracy and timing measurements; previous Baseline A scores do not describe it.
 
 Import [kaggle_pipeline.ipynb](kaggle_pipeline.ipynb) into a new **private** Kaggle notebook using **File → Import Notebook** (or upload it when creating a notebook).
 
@@ -20,7 +20,7 @@ Import [kaggle_pipeline.ipynb](kaggle_pipeline.ipynb) into a new **private** Kag
 
 Use `SPLIT = "public_test"` for public-test inference. Train-only scoring is skipped automatically. Keep `TRAIN_TRANSCRIPTS = False` for actual audio inference. `REFERENCE_REPLAY` is an optional, separate train evaluator and defaults to false.
 
-`REVISION` can be a Git commit hash for a reproducible source snapshot. Existing checkouts are never overwritten; start a fresh session or change `REPO_DIR` to clone again. Each inference run gets a separate output directory.
+`REVISION` can be a Git commit hash for a reproducible source snapshot. A clean existing checkout is fetched and checked out at the requested revision without merging; local edits stop setup. Preserve edits and choose a new `REPO_DIR` if needed. Each inference run gets a separate output directory.
 
 Model downloads can take several minutes and require disk space for the roughly 8 GB FP16 LLM plus cache and dependencies. To use pre-attached model assets, set `LLM_PATH` and `ASR_PATH` to their local model directories. Those assets must match the pinned configuration. Internet is still needed for source/dependency setup unless you prepare those separately.
 
@@ -29,3 +29,5 @@ The default sample budget is 27 seconds. A larger development budget does not sa
 `PROMPT_CACHE = True` enables within-sample prompt KV reuse in the Transformers backend. Set it to false to compare full prompt processing. The cache resets for every query. Inspect `llm.cache` events for `cached_tokens` and `fresh_tokens`, and `llm.output` for `prefill_seconds` and `generation_seconds`.
 
 Detailed query tracing is enabled by default with `STEP_LOGGING = True`. With `LIVE_STEPS = True`, live output and `inference.log` include each stage's full inputs and outputs as formatted JSON. `steps.jsonl` stores full inputs/outputs, and the final notebook cell displays expandable steps for a selected `QUERY_ID`. Logs include context, transcripts, the rendered LLM prompt, generated tool-call text, validation, tool results, and final predictions. They contain observed data and generated output, not hidden model reasoning. Keep them private. Disable logging for performance measurements because writing full prompts adds overhead.
+
+After importing the updated notebook, restart the Kaggle session and run from the first cell. The setup supports `REVISION="main"` or an exact commit and rejects source versions that predate the clean pipeline.

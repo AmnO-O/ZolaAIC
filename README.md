@@ -1,18 +1,23 @@
 # ZolaAIC — offline Vietnamese tool agent
 
-Source for a Vietnamese voice assistant using **Gipformer 1.5 68M RNN-T**, **Qwen3-4B-Instruct-2507**, and the actual Steerability SystemPrompt/FewShot controls. Model weights are frozen. No fine-tuning or RL is included.
+Source for a Vietnamese voice assistant using **Gipformer 1.5 68M RNN-T**, **Qwen3-4B-Instruct-2507**, and the actual Steerability SystemPrompt control. Model weights are frozen. No fine-tuning or RL is included.
 
 Audio and conversation history → local ASR → controlled LLM tool calls → organiser ToolEnv → `submission.jsonl`.
+
+Runtime responsibilities, compatibility guarantees, and remaining semantic
+heuristics are documented in [the architecture guide](docs/architecture.md).
+The single general prompt lives in `src/lifemate/prompt_assets/system.txt`.
+Validation uses schemas and observed evidence; it does not rewrite intent.
 
 For Kaggle, import [notebooks/kaggle_pipeline.ipynb](notebooks/kaggle_pipeline.ipynb) and follow the [notebook instructions](notebooks/README.md). It clones this repository, prepares models, and runs on your attached dataset.
 
 To generate a complete public-test submission, use [notebooks/kaggle_public_test.ipynb](notebooks/kaggle_public_test.ipynb). It runs all public audio samples, reports progress, and validates complete coverage/structure before exporting `result/submission.jsonl` for manual submission. It does not access train labels, compute public-test accuracy, or submit automatically.
 
-The pipeline uses one bounded observe-act controller: the model may return several independent tool calls per decision, and the loop stops on an empty decision, a clarification request, eight decisions, or the deadline. There is no separate planner model. Full installed schemas are the default; experimental pruning (`LIFEMATE_TOOL_PRUNING=1`) retains the full catalog for recovery.
+The pipeline uses one bounded observe-act controller: the model may return several independent tool calls per decision, and the loop stops on an empty decision, a clarification request, eight decisions, or the deadline. There is no separate planner model. Every decision receives the full permitted schemas. Keyword routing, continuation nudges and task-specific argument rewriting have been removed.
 
-The controller preserves explicit amounts, recipients, dates, addresses, names, and lookup filters instead of guessing replacements. It grounds IDs/phone numbers from actual current or historical observations and explicit user input. Only exact profile-address aliases and unambiguous observed event locations are resolved; an omitted event end can preserve its observed duration when rescheduling. This is validation and limited normalization, not a complete semantic correctness guarantee.
+The controller passes proposed arguments unchanged after allowlist, evidence and organiser schema validation. It grounds IDs and phone numbers in successful observations or explicit user data. The model resolves dates, addresses, conditions and multi-action intent from the supplied context and tools. The harness does not infer branch outcomes, append event end times, rewrite destinations, or choose payment sources. This is not a guarantee of semantic correctness.
 
-System behavior instructions and demonstration guidance are written in English. User requests, ASR transcripts, profile values, tool results, and catalog descriptions retain their supplied language. Tool names and schemas are preserved exactly. The language change has not been benchmarked for accuracy or speed.
+General system instructions are written in English; no few-shot demonstrations are injected. User requests, ASR transcripts, profile values, tool results, and catalog descriptions retain their supplied language. Tool names and schemas are preserved exactly. The language change has not been benchmarked for accuracy or speed.
 
 ## Setup
 
@@ -45,7 +50,7 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8
 python scripts/infer.py --split-dir /path/to/public_test --backend lifemate.backend:create_backend --output result/submission.jsonl
 ```
 
-The runner refuses to overwrite an existing output. Defaults: `LIFEMATE_ASR_KIND=gipformer`, `LIFEMATE_PROMPT_MODE=steerability`, 27-second sample budget, and a 16,384-token context limit. Prompt modes `system` and `baseline` support controlled comparisons. The competition target is 30 seconds per sample; A30 timing and deployment validation are pending.
+The runner refuses to overwrite an existing output. Defaults: `LIFEMATE_ASR_KIND=gipformer`, `LIFEMATE_PROMPT_MODE=system`, 27-second sample budget, and a 16,384-token context limit. `baseline` omits system controls for diagnostics. Old prompt variants and the `steerability` few-shot mode are retired; use historical commits to reproduce those experiments. The competition target is 30 seconds per sample; A30 timing and deployment validation are pending.
 
 Session/export failures are isolated per sample, with no retry or fabricated state hash. Later samples still run. If a real output row cannot be exported, it is omitted, marked `missing_submission_row` in the trace, and the process exits nonzero after the batch. That output is partial and must not be treated as a complete submission. Failed actual tool calls remain in the exported environment log. Attempted and successful actions are recorded separately.
 

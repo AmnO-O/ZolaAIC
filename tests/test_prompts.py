@@ -1,72 +1,47 @@
+"""General instructions preserve facts without inserting demonstrations."""
 import copy
 from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-from lifemate.prompts import (
-    PromptControls,
-    INSTRUCTION,
-    INSTRUCTION_A,
-    INSTRUCTION_B_ID,
-    INSTRUCTION_B_COND,
-    INSTRUCTION_B_COND2,
-    INSTRUCTION_B_COMBINED,
-    EXAMPLES,
-    get_instruction,
-)
-from lifemate.backend import parse_calls
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from lifemate.prompts import INSTRUCTION, PromptControls
 
 
 class PromptTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):cls.controls=PromptControls('steerability')
+    def test_context_history_and_tools_are_not_mutated(self):
+        messages = [{'role': 'system', 'content': 'SAMPLE_TIME_AND_PROFILE'},
+                    {'role': 'user', 'content': 'Yêu cầu hiện tại'},
+                    {'role': 'tool', 'name': 'service.read', 'content': 'OBSERVED_ID'}]
+        original = copy.deepcopy(messages)
+        controls = PromptControls('system')
+        output = controls.apply(messages, [{'name': 'service.act'}])
+        self.assertEqual(messages, original)
+        self.assertEqual(output[1:], original[1:])
+        self.assertIn(INSTRUCTION, output[0]['content'])
+        self.assertIn('SAMPLE_TIME_AND_PROFILE', output[0]['content'])
+        self.assertEqual(output[0]['content'].count(INSTRUCTION), 1)
 
-    def test_instruction_variants_selection(self):
-        self.assertEqual(get_instruction('a'), INSTRUCTION_A)
-        self.assertEqual(get_instruction('b_id'), INSTRUCTION_B_ID)
-        self.assertEqual(get_instruction('b_cond'), INSTRUCTION_B_COND)
-        self.assertEqual(get_instruction('b_cond2'), INSTRUCTION_B_COND2)
-        self.assertEqual(get_instruction('b_combined'), INSTRUCTION_B_COMBINED)
-        controls_bid = PromptControls('steerability', variant='b_id')
-        output = controls_bid.apply([{'role': 'system', 'content': 'ctx'}, {'role': 'user', 'content': 'req'}], [])
-        self.assertIn(INSTRUCTION_B_ID, output[0]['content'])
-        controls_bcond2 = PromptControls('steerability', variant='b_cond2')
-        output2 = controls_bcond2.apply([{'role': 'system', 'content': 'ctx'}, {'role': 'user', 'content': 'req'}], [])
-        self.assertIn(INSTRUCTION_B_COND2, output2[0]['content'])
+    def test_no_examples_or_domain_specific_tool_names(self):
+        for text in ('Positive example', 'evt_123', 'calendar.update_event',
+                     'Sếp Dũng', 'phòng ngủ nhỏ', 'banking.transfer'):
+            self.assertNotIn(text, INSTRUCTION)
+        self.assertLess(len(INSTRUCTION.split()), 400)
 
-    def test_context_tools_and_results_preserved_without_mutation(self):
-        messages=[{'role':'system','content':'SAMPLE_CONTEXT_TIME'},
-                  {'role':'assistant','content':'','tool_calls':[{'type':'function','function':{'name':'contacts.search','arguments':{'query':'Lan'}}}]},
-                  {'role':'tool','content':'OBSERVED_ID_FROM_TOOL'}]
-        original=copy.deepcopy(messages)
-        output=self.controls.apply(messages,[{'name':'notes.create'},{'name':'sys.ask_missing_info'}])
-        self.assertEqual(messages,original)
-        self.assertEqual(output[1:],original[1:])
-        self.assertEqual(sum(m['role']=='system' for m in output),1)
-        self.assertIn('SAMPLE_CONTEXT_TIME',output[0]['content'])
-        self.assertEqual(output[0]['content'].count(self.controls.instruction),1)
-        self.assertIn('Positive example',output[0]['content'])
-        self.assertNotIn('"name":"sms.send"',output[0]['content'])
+    def test_system_prefix_is_stable_across_observations(self):
+        controls = PromptControls('system')
+        messages = [{'role': 'system', 'content': 'context'}, {'role': 'user', 'content': 'request'}]
+        later = messages + [{'role': 'tool', 'content': 'new observation'}]
+        self.assertEqual(controls.apply(messages, [])[0], controls.apply(later, [])[0])
 
-    def test_fixed_examples_stay_identical_across_decisions(self):
-        tools=[{'name':'notes.create'},{'name':'sys.ask_missing_info'}]
-        first=[{'role':'system','content':'context'},{'role':'user','content':'request'}]
-        second=first+[{'role':'tool','content':'new observation'}]
-        self.assertEqual(self.controls.apply(first,tools)[0],self.controls.apply(second,tools)[0])
+    def test_baseline_is_explicit_noop(self):
+        messages = [{'role': 'user', 'content': 'task'}]
+        self.assertEqual(PromptControls('baseline').apply(messages, []), messages)
 
-    def test_baseline_is_an_explicit_noop(self):
-        messages=[{'role':'user','content':'task'}]
-        self.assertEqual(PromptControls('baseline').apply(messages,[]),messages)
-
-    def test_demonstrations_use_valid_native_calls_without_fabricated_ids(self):
-        for required,example in EXAMPLES:
-            calls=parse_calls(example['behavior'])
-            self.assertTrue(calls)
-            for call in calls:
-                self.assertIn(call['name'],required)
-                self.assertNotIn('contact_id',call['arguments'])
-                self.assertNotIn('event_id',call['arguments'])
+    def test_legacy_mode_fails_instead_of_silently_changing_experiment(self):
+        with self.assertRaises(ValueError):
+            PromptControls('steerability')
 
 
-if __name__=='__main__':unittest.main()
+if __name__ == '__main__':
+    unittest.main()

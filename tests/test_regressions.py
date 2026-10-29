@@ -32,7 +32,7 @@ class RegressionTests(unittest.TestCase):
         env=Env(responses)
         decisions=iter([batch,[],[],[]])
         row,log=run_agent(env,lambda *_:next(decisions),messages,
-            tools or [spec(c['name']) for c in batch],time.monotonic()+5,continue_after_read=False)
+            tools or [spec(c['name']) for c in batch],time.monotonic()+5)
         return row['tool_calls'],log
 
     def test_150k_is_not_treated_as_50k(self):
@@ -97,13 +97,12 @@ class RegressionTests(unittest.TestCase):
         actual,_=self.execute(messages,batch)
         self.assertEqual(actual,batch)
 
-    def test_ambiguous_event_destination_is_not_guessed(self):
+    def test_controller_does_not_resolve_ambiguous_event_destination(self):
         batch=[call('ride_hailing.book',pickup='A',dropoff='họp',vehicle='car4')]
         messages=[user('Đặt xe đi họp'),result('calendar.list_events',{'events':[
             {'id':'a','title':'họp','location':'A'},{'id':'b','title':'họp','location':'B'}]})]
         actual,log=self.execute(messages,batch)
-        self.assertEqual(actual,[])
-        self.assertIn('Ambiguous',log['trace'][0]['result']['validation_error'])
+        self.assertEqual(actual,batch)
 
     def test_explicit_date_survives_person_named_mai_and_history(self):
         batch=[call('weather.get_forecast',date='2026-12-05')]
@@ -120,11 +119,11 @@ class RegressionTests(unittest.TestCase):
         actual,_=self.execute(messages,batch,[spec('calendar.cancel_event',props={'event_id':{'x-ref':'calendar.events'}})])
         self.assertEqual(actual,batch)
 
-    def test_historical_event_duration_is_available(self):
+    def test_historical_duration_does_not_inject_argument(self):
         messages=[{'role':'assistant','tool_calls':[call('calendar.list_events')],
             'tool_results':[{'ok':True,'events':[{'id':'e1','start':'2026-11-29T08:00:00+07:00','end':'2026-11-29T09:00:00+07:00'}]}]},user('Dời lịch muộn một giờ')]
         actual,_=self.execute(messages,[call('calendar.update_event',event_id='e1',start='2026-11-29T09:00:00+07:00')])
-        self.assertEqual(actual[0]['arguments']['end'],'2026-11-29T10:00:00+07:00')
+        self.assertNotIn('end', actual[0]['arguments'])
 
     def test_do_not_change_end_when_user_explicitly_keeps_it(self):
         batch=[call('calendar.update_event',event_id='e1',start='2026-11-29T08:30:00+07:00')]
@@ -133,13 +132,13 @@ class RegressionTests(unittest.TestCase):
         actual,_=self.execute(messages,batch)
         self.assertEqual(actual,batch)
 
-    def test_historical_created_event_can_supply_duration(self):
+    def test_created_event_duration_does_not_inject_argument(self):
         messages=[{'role':'assistant','tool_calls':[call('calendar.create_event')],
             'tool_results':[{'ok':True,'item':{'id':'e1','start':'2026-11-29T08:00:00+07:00','end':'2026-11-29T09:00:00+07:00'}}]},
             user('Dời lịch vừa tạo muộn một giờ')]
         actual,_=self.execute(messages,[call('calendar.update_event',event_id='e1',start='2026-11-29T09:00:00+07:00')],
             [spec('calendar.update_event',props={'event_id':{'x-ref':'calendar.events'}})])
-        self.assertEqual(actual[0]['arguments']['end'],'2026-11-29T10:00:00+07:00')
+        self.assertNotIn('end', actual[0]['arguments'])
 
     def test_wrong_app_result_does_not_ground_id(self):
         actual,_=self.execute([user('Nhắn cho mẹ'),result('banking.get_balance',{'accounts':[{'id':'same_id'}]})],
@@ -206,41 +205,39 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(log['write_succeeded'])
         self.assertEqual(log['termination'],'execution_failed')
 
-    def test_shortlist_expands_on_empty_decision(self):
+    def test_full_catalog_is_provided_without_lexical_pruning(self):
         env=Env();seen=[]
-        all_tools=[spec('notes.create'),spec('alarm.create')]
-        decisions=iter([[],[call('alarm.create',time='t')],[]])
-        def decide(messages,tools,remaining):seen.append([t['name'] for t in tools]);return next(decisions)
-        row,log=run_agent(env,decide,[],all_tools[:1],time.monotonic()+5,full_tools=all_tools)
-        self.assertEqual(seen[1],['notes.create','alarm.create'])
-        self.assertEqual(row['tool_calls'][0]['name'],'alarm.create')
-        self.assertTrue(log['expanded_tools'])
-
-    def test_omitted_proposal_uses_full_schema_grounding(self):
-        env=Env();batch=[call('sms.send',contact_id='invented')];decisions=iter([batch,[]])
-        all_tools=[spec('notes.create'),spec('sms.send',props={'contact_id':{'x-ref':'contacts.contacts'}})]
-        row,log=run_agent(env,lambda *_:next(decisions),[user('Nhắn cho mẹ')],all_tools[:1],
-            time.monotonic()+5,full_tools=all_tools)
+        tools=[spec('notes.create'),spec('alarm.create'),spec('unknown_app.act')]
+        def decide(messages, offered, remaining):
+            seen.append(offered)
+            return []
+        row,log=run_agent(env,decide,[],tools,time.monotonic()+5)
+        self.assertEqual(seen,[tools])
         self.assertEqual(row['tool_calls'],[])
-        self.assertTrue(log['expanded_tools'])
+
+    def test_full_catalog_schema_grounds_every_call(self):
+        env=Env();decisions=iter([[call('sms.send',contact_id='invented')],[]])
+        tools=[spec('notes.create'),spec('sms.send',props={'contact_id':{'x-ref':'contacts.contacts'}})]
+        row,log=run_agent(env,lambda *_:next(decisions),[user('Nhắn cho mẹ')],tools,time.monotonic()+5)
+        self.assertEqual(row['tool_calls'],[])
+        self.assertIn('Ungrounded',log['trace'][0]['result']['validation_error'])
 
     def test_spoken_phone_number_is_grounded_and_accepted(self):
         batch=[call('ewallet.topup_mobile',phone='09505360367',amount=50000)]
         actual,_=self.execute([user('Nạp dùm 50 ngàn cho số không chín năm không năm ba sáu không ba sáu bảy nha.')],batch)
         self.assertEqual(actual,batch)
 
-    def test_event_title_containment_resolves_dropoff(self):
+    def test_event_title_containment_does_not_rewrite_dropoff(self):
         batch=[call('ride_hailing.book',pickup='A',dropoff='hội họp phụ huynh',vehicle='car4')]
         messages=[user('Đặt xe đi hội họp phụ huynh'),result('calendar.list_events',
             {'events':[{'id':'e1','title':'họp phụ huynh','location':'Trường Nguyễn Bỉnh Khiêm'}]})]
         actual,_=self.execute(messages,batch)
-        self.assertEqual(actual[0]['arguments']['dropoff'],'Trường Nguyễn Bỉnh Khiêm')
+        self.assertEqual(actual, batch)
 
-    def test_unresolved_event_destination_without_lookup_fails_validation(self):
+    def test_controller_does_not_classify_event_destinations_by_keywords(self):
         batch=[call('ride_hailing.book',pickup='A',dropoff='hội họp phụ huynh',vehicle='car4')]
         actual,log=self.execute([user('Đặt xe đi hội họp phụ huynh')],batch)
-        self.assertEqual(actual,[])
-        self.assertIn('Unresolved event destination',log['trace'][0]['result']['validation_error'])
+        self.assertEqual(actual,batch)
 
 
 if __name__=='__main__':unittest.main()
