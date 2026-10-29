@@ -4,13 +4,31 @@ import sys
 import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-from lifemate.prompts import PromptControls, INSTRUCTION, EXAMPLES
+from lifemate.prompts import (
+    PromptControls,
+    INSTRUCTION,
+    INSTRUCTION_A,
+    INSTRUCTION_B_ID,
+    INSTRUCTION_B_COND,
+    INSTRUCTION_B_COMBINED,
+    EXAMPLES,
+    get_instruction,
+)
 from lifemate.backend import parse_calls
 
 
 class PromptTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):cls.controls=PromptControls('steerability')
+
+    def test_instruction_variants_selection(self):
+        self.assertEqual(get_instruction('a'), INSTRUCTION_A)
+        self.assertEqual(get_instruction('b_id'), INSTRUCTION_B_ID)
+        self.assertEqual(get_instruction('b_cond'), INSTRUCTION_B_COND)
+        self.assertEqual(get_instruction('b_combined'), INSTRUCTION_B_COMBINED)
+        controls_bid = PromptControls('steerability', variant='b_id')
+        output = controls_bid.apply([{'role': 'system', 'content': 'ctx'}, {'role': 'user', 'content': 'req'}], [])
+        self.assertIn(INSTRUCTION_B_ID, output[0]['content'])
 
     def test_context_tools_and_results_preserved_without_mutation(self):
         messages=[{'role':'system','content':'SAMPLE_CONTEXT_TIME'},

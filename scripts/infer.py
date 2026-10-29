@@ -33,7 +33,12 @@ def main():
     parser.add_argument('--train-transcripts', action='store_true', help='Development only: use train reference transcripts instead of ASR')
     parser.add_argument('--budget-seconds',type=float,default=27,
                         help='Per-sample development budget; competition deployment still requires under 30 seconds')
+    parser.add_argument('--prompt-variant', choices=['a', 'b_id', 'b_cond', 'b_combined'],
+                        default=os.environ.get('LIFEMATE_PROMPT_VARIANT', 'a'),
+                        help='Prompt invariant variant: a (baseline), b_id (grounded ID rule), b_cond (condition polarity), b_combined (both)')
     args = parser.parse_args()
+    if args.prompt_variant:
+        os.environ['LIFEMATE_PROMPT_VARIANT'] = args.prompt_variant
     if not math.isfinite(args.budget_seconds) or args.budget_seconds <= 0:
         parser.error('--budget-seconds must be a positive finite number')
     if args.verbose_steps and not args.step_log:
