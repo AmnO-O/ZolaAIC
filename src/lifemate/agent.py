@@ -51,17 +51,25 @@ def _parameter_value(text, schema):
     return value
 
 
-def parse_decision(text, tools=()):
+def parse_decision(text, tools=(), allow_final_text=False):
     """Qwen3.5 native XML only. Truncated output is never a successful stop."""
     try:
         body = re.sub(r'^\s*<think>\s*</think>\s*', '', text, count=1).strip()
         if body == '[]':
             return Decision(raw_text=text)
         blocks = re.findall(r'<tool_call>(.*?)</tool_call>', body, re.S)
+        if not blocks and allow_final_text and body and not any(
+                marker in body for marker in ('<tool_call', '</tool_call', '<function', '<parameter', '<think', '</think', '<|im_')):
+            # A complete native final answer is a model stop, never verified success.
+            return Decision(raw_text=text)
+        first_call = body.find('<tool_call>')
+        prefix = body[:first_call] if first_call >= 0 else body
+        tail = body[first_call:] if first_call >= 0 else ''
         if (not blocks or body.count('<tool_call>') != len(blocks)
                 or body.count('</tool_call>') != len(blocks)
-                or re.sub(r'<tool_call>.*?</tool_call>', '', body, flags=re.S).strip()):
-            raise ValueError('Emit complete native XML tool calls or literal []')
+                or any(marker in prefix for marker in ('<function', '<parameter', '<think', '</think', '<|im_'))
+                or re.sub(r'<tool_call>.*?</tool_call>', '', tail, flags=re.S).strip()):
+            raise ValueError('Use complete native XML calls with no suffix, or finish the assistant turn')
         specs = {t['name']: t for t in tools}
         calls = []
         for block in blocks:

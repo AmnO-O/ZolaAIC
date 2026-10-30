@@ -9,7 +9,7 @@ import time
 
 from .messages import chat_messages, native_tools
 from .prompts import INSTRUCTION, apply_policy
-from .agent import parse_decision
+from .agent import Decision, parse_decision
 
 
 class LocalBackend:
@@ -94,7 +94,9 @@ class LocalBackend:
 
     def decide(self, messages, tools, remaining_seconds):
         text = self._generate(messages, tools, remaining_seconds)
-        return parse_decision(text, tools)
+        if not getattr(self, '_generation_complete', True):
+            return Decision(protocol_error='Token limit reached before assistant turn ended', raw_text=text)
+        return parse_decision(text, tools, allow_final_text=getattr(self, '_generation_complete', False))
 
     def _generate(self, messages, tools, remaining_seconds, max_tokens=384, controls=True, phase='llm'):
         if remaining_seconds <= 0:
@@ -171,11 +173,18 @@ class LocalBackend:
             self.prompt_cache.store(generated.past_key_values, token_ids[:-1])
         return text
 
+    def _assistant_stop_ids(self):
+        values = [self.tokenizer.eos_token_id]
+        configured = self.model.generation_config.eos_token_id
+        values.extend(configured if isinstance(configured, list) else [configured])
+        return sorted({value for value in values if isinstance(value, int)})
+
     def _generate_hybrid(self, encoded, tokens, budget, end, emit, phase, deadline_class):
         """Fresh recurrent state per decision, memory-bounded chunked prefill."""
         from transformers import StoppingCriteriaList
         started = time.monotonic()
         cache = None
+        stop_ids = self._assistant_stop_ids()
         # This task is text-only. The conditional-generation wrapper keeps
         # rope_deltas after generate(); clear it before a fresh prompt.
         if hasattr(self.model.model, 'rope_deltas'):
@@ -211,6 +220,7 @@ class LocalBackend:
             generation_started = time.monotonic()
             generated = self.model.generate(**encoded, max_new_tokens=budget, do_sample=False,
                 past_key_values=cache, use_cache=True, logits_to_keep=1,
+                eos_token_id=stop_ids,
                 return_dict_in_generate=True,
                 stopping_criteria=StoppingCriteriaList([deadline_class()]),
                 pad_token_id=self.tokenizer.eos_token_id)
@@ -218,9 +228,12 @@ class LocalBackend:
             self.torch.cuda.synchronize(self.device)
         generation = time.monotonic()-generation_started
         output = generated.sequences[0, tokens:]
+        self._generation_complete = bool(len(output) and int(output[-1]) in stop_ids)
         text = self.tokenizer.decode(output, skip_special_tokens=True)
         stats = {'input_tokens': tokens, 'output_tokens': len(output), 'cached_tokens': 0,
-                 'prefill_seconds': prefill, 'generation_seconds': generation}
+                 'prefill_seconds': prefill, 'generation_seconds': generation,
+                 'assistant_turn_complete': self._generation_complete,
+                 'eos_token_id': self.tokenizer.eos_token_id, 'stop_token_ids': stop_ids}
         self.stats.append(stats)
         if emit:
             emit(phase + '.output', output=text, **{k:v for k,v in stats.items() if k!='input_tokens'})

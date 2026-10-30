@@ -37,6 +37,11 @@ class AgentTests(unittest.TestCase):
         text = '<tool_call><function=service.act><parameter=amount>500000</parameter><parameter=enabled>True</parameter><parameter=items>[1,2]</parameter><parameter=note>  hello  </parameter></function></tool_call>'
         result = parse_decision(text, tools)
         self.assertIsNone(result.protocol_error)
+        self.assertIsNone(parse_decision('Short introduction.\n'+text, tools).protocol_error)
+        self.assertIsNone(parse_decision('Finished.', tools, allow_final_text=True).protocol_error)
+        self.assertIsNotNone(parse_decision('Finished.', tools).protocol_error)
+        self.assertIsNotNone(parse_decision(text+'suffix', tools, allow_final_text=True).protocol_error)
+        self.assertIsNotNone(parse_decision('<tool_call>unfinished', tools, allow_final_text=True).protocol_error)
         self.assertEqual(result.tool_calls[0]['arguments'],
                          {'amount':500000,'enabled':True,'items':[1,2],'note':'  hello  '})
         self.assertIsNotNone(parse_decision(text.replace('500000','NaN'), tools).protocol_error)
@@ -114,6 +119,13 @@ class AgentTests(unittest.TestCase):
         backend=LocalBackend.__new__(LocalBackend)
         backend._generate=lambda *_:'[]'
         self.assertIsNone(backend.decide([],[],5).protocol_error)
+        backend._generation_complete=False
+        self.assertIsNotNone(backend.decide([],[],5).protocol_error)
+        backend._generation_complete=True
+        from types import SimpleNamespace
+        backend.tokenizer=SimpleNamespace(eos_token_id=100)
+        backend.model=SimpleNamespace(generation_config=SimpleNamespace(eos_token_id=99))
+        self.assertEqual(backend._assistant_stop_ids(),[99,100])
         messages=[{'role':'system','content':'original context'},{'role':'user','content':'request'}]
         before=copy.deepcopy(messages)
         rendered=apply_policy(messages)

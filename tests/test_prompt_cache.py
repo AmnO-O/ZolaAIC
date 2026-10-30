@@ -116,7 +116,7 @@ class PromptCacheTests(unittest.TestCase):
         ids=torch.tensor([[1,5,8,9]])
         with torch.inference_mode():
             fresh=model.generate(input_ids=ids,attention_mask=torch.ones_like(ids),
-                                 max_new_tokens=2,do_sample=False,pad_token_id=0)
+                                 max_new_tokens=2,do_sample=False,pad_token_id=0,eos_token_id=0)
         self.assertEqual(first,backend.tokenizer.decode(fresh[0,4:]))
         self.assertFalse(backend.tokenizer.thinking)
         self.assertEqual([s['cached_tokens'] for s in backend.stats],[0,0])
