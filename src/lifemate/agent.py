@@ -37,13 +37,11 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, pl
             break
         if memory_mode == 'memory_compact' and current_memory is not None:
             tail = copy.deepcopy(messages[compact_tail:])
-            # The latest assistant's calls must stay paired with their results.
-            for item in tail:
-                if item.get('role') == 'assistant' and 'tool_calls' in item:
-                    item.pop('content', None)
-            messages = (copy.deepcopy(anchors) +
-                        [{'role': 'assistant', 'content': '<memory>' + current_memory + '</memory>'}] + tail)
-            compact_tail = len(anchors) + 1
+            # Retain the latest accepted assistant turn intact: its memory and
+            # calls belong to one generation. Drop only older live batches.
+            # With one batch this is identical to memory_full, including roles.
+            messages = copy.deepcopy(anchors) + tail
+            compact_tail = len(anchors)
         if emit:
             emit('decision.input', input={'messages': messages, 'tools': tools},
                  remaining_seconds=max(0, deadline-time.monotonic()))
@@ -75,6 +73,10 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, pl
             messages.append({'role': 'assistant', 'content': decision.raw_text})
             messages.append({'role': 'user', 'content':
                 'Controller output-format error: ' + protocol_error +
+                '. The entire preceding response was rejected. NONE of its proposed tool calls '
+                'were executed, and its memory update was not accepted. Do not mark those '
+                'proposed actions completed or use their arguments as observed facts. '
+                'Only actual environment results establish execution outcomes' +
                 ('. Use one <memory>, then native tool calls or literal [].' if memory_mode else
                  '. Use a short <plan> when needed, then native tool calls or literal [].')})
             if emit:

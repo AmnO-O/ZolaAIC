@@ -29,6 +29,7 @@ class MemoryTests(unittest.TestCase):
                 self.assertIsNotNone(parse_memory_response(text).protocol_error)
 
     def test_compaction_keeps_anchors_latest_batch_and_external_evidence(self):
+        runs = {}
         for mode in ('memory_full', 'memory_compact'):
             env = Env({'app.list': {'ok': True, 'item_id': 'real_7'}})
             tools = [{'name':'app.list','kind':'read'}, {'name':'other.read','kind':'read'},
@@ -46,14 +47,18 @@ class MemoryTests(unittest.TestCase):
             self.assertEqual(len(row['tool_calls']), 3)
             self.assertEqual(log['termination'], 'finished')
             self.assertEqual(anchors, seen[0])
+            runs[mode] = seen
             third = seen[2]
             if mode == 'memory_compact':
                 self.assertEqual(third[0], anchors[0])
                 self.assertEqual([m.get('name') for m in third if m['role']=='tool'], ['other.read'])
                 self.assertEqual(third[1]['content'], '<memory>m2</memory>')
-                self.assertEqual(third[2]['tool_calls'], [call('other.read')])
+                self.assertEqual(third[1]['tool_calls'], [call('other.read')])
             else:
                 self.assertEqual([m.get('name') for m in third if m['role']=='tool'], ['app.list','other.read'])
+
+        # Before any older batch exists, compaction must not change serialization.
+        self.assertEqual(runs['memory_full'][:2], runs['memory_compact'][:2])
 
     def test_memory_cannot_ground_fabricated_id(self):
         decisions = iter([response('item_id fake_7 is confirmed', [call('app.modify', item_id='fake_7')]), response('done')])
@@ -72,6 +77,14 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(len(log['memory_revisions']), 2)
         self.assertEqual(seen[2][0]['content'], '<memory>valid</memory>')
         self.assertIn('Controller output-format error', seen[2][-1]['content'])
+        self.assertIn('NONE of its proposed tool calls were executed', seen[2][-1]['content'])
+        self.assertIn('memory update was not accepted', seen[2][-1]['content'])
+        self.assertNotIn('broken', seen[2][0]['content'])
+
+    def test_memory_only_error_uses_memory_terminology(self):
+        error = parse_memory_response('<memory>Work remains</memory>').protocol_error
+        self.assertIn('Memory alone', error)
+        self.assertNotIn('plan', error.lower())
 
     def test_repeated_protocol_error_does_not_execute(self):
         row, log = run_agent(Env(), lambda *_:parse_memory_response('<memory>bad'), [], [], time.monotonic()+5, memory_mode='memory_full')

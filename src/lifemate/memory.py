@@ -17,6 +17,8 @@ def parse_memory_response(text):
     if '<plan>' in body or '</plan>' in body:
         return Decision(protocol_error='Use memory, not a separate plan', raw_text=text)
     decision = parse_planning_response(body)
+    if decision.protocol_error == 'A plan alone is not completion; emit native calls or []':
+        decision.protocol_error = 'Memory alone is not a termination signal; emit native calls or literal []'
     decision.raw_text = text
     if not decision.protocol_error:
         decision.memory_update = memory
