@@ -1,6 +1,8 @@
-# Qwen3.5-4B base-model trial
+# Qwen3.5-4B strict tool-output notebooks
 
-Start with kaggle_pipeline.ipynb: the same three train IDs as the previous run, reference transcripts, thinking disabled, 90-second development budget. Set TRAIN_TRANSCRIPTS=False for the second audio run. This downloads the pinned official checkpoint to models/qwen3.5-4b and keeps old weights separate. Cross-turn recurrent cache reuse is disabled; native generation caching stays enabled. No fine-tuning is performed in the trial.
+The train-evaluation and public-inference notebooks pin inference source to `4f7def6e1de13860f61d87b66d416fceabde62a4`. This includes the catalog-backed installed-app description dictionary and early output guard. Only consecutive native tool-call blocks or literal `[]` are accepted. Invalid prose is rejected, never treated as successful completion; at most one protocol repair is allowed within the sample budget. This is not grammar-constrained decoding or a guarantee of correct actions.
+
+Upload `kaggle_pipeline.ipynb` to Kaggle for the next train test. Attach the authorised private dataset `amnpham/zalochallenge`, select a T4 GPU, enable internet for setup and Run All in a fresh session. Defaults: three train samples, reference transcripts, 90 seconds/sample, 16 turns, 1024 output tokens/turn, thinking disabled, private step logs on, live printing off. To test real Gipformer ASR, set `TRAIN_TRANSCRIPTS=False` before running inference. No fine-tuning or benchmark is started by downloading the notebook.
 
 # Kaggle workflows
 
