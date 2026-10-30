@@ -5,6 +5,7 @@ import time
 from .grounding import Evidence
 from .execution import ExecutionLedger
 from .planning import Decision
+from .validation import safe_canonicalize
 
 def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, planning=False, memory_mode=None):
     """Exactly one supplied environment; never retry writes or replay history automatically."""
@@ -123,6 +124,9 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, pl
                 break
             call = copy.deepcopy(original)
             name, args = call['name'], call['arguments']
+            if name in specs and isinstance(args, dict):
+                args = safe_canonicalize(name, args, specs[name])
+                call['arguments'] = args
             error = None
             if name not in specs:
                 error = 'Tool is not permitted for this sample.'
