@@ -19,7 +19,7 @@ class LocalBackend:
         os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
         import numpy as np
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, Qwen3_5ForConditionalGeneration
         random.seed(42)
         np.random.seed(42)
         torch.manual_seed(42)
@@ -34,11 +34,19 @@ class LocalBackend:
         torch.backends.cuda.matmul.allow_tf32 = False
         self.torch, self.device = torch, device
         self.tokenizer = AutoTokenizer.from_pretrained(llm_path, local_files_only=True)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            llm_path, local_files_only=True, torch_dtype=torch.float16,
+        config = AutoConfig.from_pretrained(llm_path, local_files_only=True)
+        if config.model_type != 'qwen3_5':
+            raise ValueError('This trial requires the pinned Qwen3.5 checkpoint, not old Qwen3 assets')
+        self.is_hybrid = True
+        loader = Qwen3_5ForConditionalGeneration
+        dtype = torch.bfloat16 if self.is_hybrid and str(device).startswith('cuda') and torch.cuda.is_bf16_supported() else torch.float16
+        self.model = loader.from_pretrained(
+            llm_path, local_files_only=True, torch_dtype=dtype,
             attn_implementation=os.environ.get('LIFEMATE_ATTN', 'sdpa')).to(device).eval()
         self.tokenizer.model_max_length = 16384
         self.model.config.max_position_embeddings = 16384
+        if self.is_hybrid:
+            self.model.config.text_config.max_position_embeddings = 16384
         adapter_path = os.environ.get('LIFEMATE_ADAPTER_PATH')
         if adapter_path:
             metadata = json.loads((Path(adapter_path)/'lifemate_policy.json').read_text())
@@ -62,13 +70,18 @@ class LocalBackend:
         self.stats = []
         from .prompt_cache import PromptCache
         self.prompt_cache = PromptCache()
-        self.reuse_prompt_cache = os.environ.get('LIFEMATE_PROMPT_CACHE', '1') == '1'
+        self.reuse_prompt_cache = not self.is_hybrid and os.environ.get('LIFEMATE_PROMPT_CACHE', '1') == '1'
         import transformers
         self.runtime_info = {'torch':torch.__version__,'transformers':transformers.__version__,
             'cuda':torch.version.cuda,'device':str(next(self.model.parameters()).device),
             'dtype':str(next(self.model.parameters()).dtype),
             'configured_attention':self.model.config._attn_implementation,
             'deterministic_algorithms':torch.are_deterministic_algorithms_enabled()}
+        self.runtime_info['model_type'] = config.model_type
+        self.runtime_info['llm_parameters'] = self.llm_parameters
+        self.runtime_info['total_parameters'] = self.llm_parameters + self.asr_parameters
+        self.runtime_info['thinking'] = False
+        self.runtime_info['cross_turn_cache'] = self.reuse_prompt_cache
         self.runtime_info['adapter_path'] = adapter_path
         self.runtime_info['policy'] = 'single'
         self.runtime_info['prompt_sha256'] = hashlib.sha256(
@@ -81,7 +94,7 @@ class LocalBackend:
 
     def decide(self, messages, tools, remaining_seconds):
         text = self._generate(messages, tools, remaining_seconds)
-        return parse_decision(text)
+        return parse_decision(text, tools)
 
     def _generate(self, messages, tools, remaining_seconds, max_tokens=384, controls=True, phase='llm'):
         if remaining_seconds <= 0:
@@ -97,7 +110,7 @@ class LocalBackend:
         turns = apply_policy(chat_messages(messages)) if controls else messages
         encoded = self.tokenizer.apply_chat_template(
             turns, tools=rendered_tools, add_generation_prompt=True,
-            tokenize=True, return_tensors='pt', return_dict=True)
+            tokenize=True, return_tensors='pt', return_dict=True, enable_thinking=False)
         tokens = encoded['input_ids'].shape[-1]
         token_ids = encoded['input_ids'][0].tolist()
         budget = min(max_tokens, 16384-tokens)
@@ -109,6 +122,8 @@ class LocalBackend:
                  'rendered_prompt': self.tokenizer.decode(encoded['input_ids'][0], skip_special_tokens=False)},
                  input_tokens=tokens, max_new_tokens=budget)
         encoded = {k: v.to(self.device) for k, v in encoded.items()}
+        if getattr(self, 'is_hybrid', False):
+            return self._generate_hybrid(encoded, tokens, budget, end, emit, phase, Deadline)
         cache, reused = self.prompt_cache.take(token_ids) if self.reuse_prompt_cache else (None, 0)
         if emit:
             emit(phase + '.cache', input_tokens=tokens, cached_tokens=reused,
@@ -154,6 +169,46 @@ class LocalBackend:
             raise TimeoutError('Model generation deadline reached')
         if self.reuse_prompt_cache:
             self.prompt_cache.store(generated.past_key_values, token_ids[:-1])
+        return text
+
+    def _generate_hybrid(self, encoded, tokens, budget, end, emit, phase, deadline_class):
+        """Fresh hybrid state per decision; native cache remains enabled within decoding."""
+        from transformers import StoppingCriteriaList
+        started = time.monotonic()
+        first = []
+        def prefill_finished(module, inputs, outputs):
+            if not first:
+                if str(self.device).startswith('cuda'):
+                    self.torch.cuda.synchronize(self.device)
+                if not self.torch.isfinite(outputs.logits[:, -1, :]).all():
+                    raise FloatingPointError('Non-finite Qwen3.5 prefill logits; inspect dtype/runtime')
+                first.append(time.monotonic()-started)
+        if emit:
+            emit(phase + '.cache', input_tokens=tokens, cached_tokens=0,
+                 prefill_tokens=tokens, fresh_tokens=tokens, enabled=False,
+                 reason='Hybrid recurrent cache is fresh for each decision')
+        handle = self.model.register_forward_hook(prefill_finished)
+        try:
+            with self.torch.inference_mode():
+                generated = self.model.generate(**encoded, max_new_tokens=budget, do_sample=False,
+                    use_cache=True, logits_to_keep=1, return_dict_in_generate=True,
+                    stopping_criteria=StoppingCriteriaList([deadline_class()]),
+                    pad_token_id=self.tokenizer.eos_token_id)
+        finally:
+            handle.remove()
+        if str(self.device).startswith('cuda'):
+            self.torch.cuda.synchronize(self.device)
+        total = time.monotonic()-started
+        prefill = first[0] if first else total
+        output = generated.sequences[0, tokens:]
+        text = self.tokenizer.decode(output, skip_special_tokens=True)
+        stats = {'input_tokens': tokens, 'output_tokens': len(output), 'cached_tokens': 0,
+                 'prefill_seconds': prefill, 'generation_seconds': max(0, total-prefill)}
+        self.stats.append(stats)
+        if emit:
+            emit(phase + '.output', output=text, **{k:v for k,v in stats.items() if k!='input_tokens'})
+        if time.monotonic() >= end:
+            raise TimeoutError('Model generation deadline reached')
         return text
 
     def transcribe(self, path, remaining_seconds):

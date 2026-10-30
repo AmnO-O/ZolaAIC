@@ -8,6 +8,8 @@ Raw rejected outputs stay in logs, not execution history. A bounded protocol cor
 
 All allowed tools are present on each turn. There is no implicit semantic goal verifier. Normal stop, clarification, validation failure, execution failure, uncertainty, no progress, turn limit and deadline are distinct diagnostics. The submission comes exclusively from the same environment's actual call log and final hash.
 
-The history is retained in full; context overflow fails instead of silently truncating. Exact-token common prefixes may reuse KV cache. Every sample resets the cache. No guaranteed speedup is claimed. Training and inference use the same chat serialization, tool schemas, context formatting and result envelope.
+The history is retained in full; context overflow fails instead of silently truncating. Qwen3.5 uses a fresh hybrid/recurrent state for every decision; native cache remains enabled within decoding. No cache cropping is applied to hybrid states. Every sample resets the cache. No guaranteed speedup is claimed. Training and inference use the same chat serialization, tool schemas, context formatting and result envelope.
 
 Remaining limitations: app-scoped IDs can still reference a wrong same-app entity; state freshness and intentional duplicate actions need task reasoning; malformed assistant outputs are detected after generation, not grammar-constrained; deterministic GPU kernels and 30-second wall time require testing on scoring hardware.
+
+Current trial: Qwen/Qwen3.5-4B pinned to 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a. The full conditional-generation loader includes vision weights (unused for text) and counts them against the parameter limit. Thinking is explicitly disabled in the native template. Protocol XML parameter values are decoded from schema types; this is wire decoding, not a heuristic rewrite of JSON arguments. Invalid/truncated XML, duplicate parameters, nonempty thinking or unrelated prose is rejected.

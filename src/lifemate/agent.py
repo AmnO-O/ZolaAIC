@@ -5,7 +5,6 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from .messages import parse_calls
 from .grounding import Evidence
 from .execution import ExecutionLedger
 
@@ -21,32 +20,71 @@ class Decision:
                 'raw_text': self.raw_text}
 
 
-def parse_decision(text):
-    """Only complete native calls or explicit [] may control execution."""
+def _parameter_value(text, schema):
+    """Decode Qwen3.5 XML wire values using their declared JSON types."""
+    kinds = schema.get('type', 'string')
+    kinds = [kinds] if isinstance(kinds, str) else kinds
+    if text in ('null', 'None') and 'null' in kinds:
+        return None
+    if 'string' in kinds:
+        return text
+    if 'boolean' in kinds and text.lower() in ('true', 'false'):
+        return text.lower() == 'true'
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError('Duplicate JSON key in structured parameter')
+            result[key] = value
+        return result
+    def invalid(value):
+        raise ValueError('Non-finite parameter')
+    value = json.loads(text, object_pairs_hook=pairs, parse_constant=invalid)
+    valid = (('integer' in kinds and type(value) is int)
+             or ('number' in kinds and type(value) in (int, float))
+             or ('boolean' in kinds and type(value) is bool)
+             or ('object' in kinds and isinstance(value, dict))
+             or ('array' in kinds and isinstance(value, list)))
+    if not valid:
+        raise ValueError('Parameter does not match its declared wire type')
+    json.dumps(value, allow_nan=False)
+    return value
+
+
+def parse_decision(text, tools=()):
+    """Qwen3.5 native XML only. Truncated output is never a successful stop."""
     try:
-        calls = parse_calls(text)
-        remainder = re.sub(r'<tool_call>.*?</tool_call>', '', text, flags=re.S).strip()
-        if not calls and remainder == '[]':
+        body = re.sub(r'^\s*<think>\s*</think>\s*', '', text, count=1).strip()
+        if body == '[]':
             return Decision(raw_text=text)
-        if not calls or remainder:
-            raise ValueError('Emit only complete native tool calls, or literal [] to stop')
-        # Duplicate keys and non-finite JSON numbers cannot be silently accepted.
-        def pairs(items):
-            result = {}
-            for key, value in items:
-                if key in result:
-                    raise ValueError('Duplicate JSON key: ' + key)
-                result[key] = value
-            return result
-        def invalid_constant(value):
-            raise ValueError('Non-finite JSON value: ' + value)
-        for block in re.findall(r'<tool_call>(.*?)</tool_call>', text, re.S):
-            obj = json.loads(block, object_pairs_hook=pairs, parse_constant=invalid_constant)
-            if set(obj) != {'name', 'arguments'}:
-                raise ValueError('Each call must contain exactly name and arguments')
-            if not isinstance(obj['arguments'], dict):
-                raise ValueError('arguments must be a JSON object')
-        json.dumps(calls, allow_nan=False)
+        blocks = re.findall(r'<tool_call>(.*?)</tool_call>', body, re.S)
+        if (not blocks or body.count('<tool_call>') != len(blocks)
+                or body.count('</tool_call>') != len(blocks)
+                or re.sub(r'<tool_call>.*?</tool_call>', '', body, flags=re.S).strip()):
+            raise ValueError('Emit complete native XML tool calls or literal []')
+        specs = {t['name']: t for t in tools}
+        calls = []
+        for block in blocks:
+            function = re.fullmatch(r'\s*<function=([^<>\s]+)>(.*?)</function>\s*', block, re.S)
+            if not function:
+                raise ValueError('Expected a native <function=...> block')
+            name, parameters = function.groups()
+            matches = list(re.finditer(r'<parameter=([^<>\s]+)>(.*?)</parameter>', parameters, re.S))
+            if re.sub(r'<parameter=[^<>\s]+>.*?</parameter>', '', parameters, flags=re.S).strip():
+                raise ValueError('Malformed parameter block')
+            props = specs.get(name, {}).get('parameters', {}).get('properties', {})
+            arguments = {}
+            for match in matches:
+                key, value = match.groups()
+                if key in arguments:
+                    raise ValueError('Duplicate parameter: ' + key)
+                # Remove template framing newlines, preserve meaningful string whitespace.
+                if value.startswith('\n'):
+                    value = value[1:]
+                if value.endswith('\n'):
+                    value = value[:-1]
+                arguments[key] = _parameter_value(value, props.get(key, {}))
+            calls.append({'name': name, 'arguments': arguments})
         return Decision(calls, raw_text=text)
     except (ValueError, TypeError) as error:
         return Decision(protocol_error=str(error), raw_text=text)

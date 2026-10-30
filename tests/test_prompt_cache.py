@@ -77,5 +77,36 @@ class PromptCacheTests(unittest.TestCase):
                 self.assertEqual(reused_output,backend.tokenizer.decode(fresh_output[0,len(ids):]))
         self.assertEqual(hits, [0, 4, 3, 1])
 
+    def test_hybrid_generation_uses_fresh_recurrent_state(self):
+        import torch
+        from transformers import Qwen3_5TextConfig, Qwen3_5ForCausalLM
+        from lifemate.backend import LocalBackend
+        torch.manual_seed(42)
+        config = Qwen3_5TextConfig(vocab_size=64, hidden_size=32, intermediate_size=64,
+            num_hidden_layers=4, num_attention_heads=2, num_key_value_heads=1,
+            head_dim=16, linear_num_key_heads=2, linear_num_value_heads=2,
+            linear_key_head_dim=8, linear_value_head_dim=8, linear_conv_kernel_dim=4,
+            layer_types=['linear_attention']*3+['full_attention'], max_position_embeddings=128,
+            rope_parameters={'rope_type':'default','rope_theta':10000,'partial_rotary_factor':0.5,'mrope_section':[1,1,2]},
+            eos_token_id=None, pad_token_id=0)
+        config._attn_implementation='eager'
+        model=Qwen3_5ForCausalLM(config).eval()
+        class Tokenizer:
+            eos_token_id=0
+            def apply_chat_template(self,*args,**kwargs):
+                self.thinking=kwargs['enable_thinking']
+                ids=torch.tensor([[1,5,8,9]])
+                return {'input_ids':ids,'attention_mask':torch.ones_like(ids)}
+            def decode(self,tokens,**kwargs):return ','.join(map(str,tokens.tolist()))
+        backend=LocalBackend.__new__(LocalBackend)
+        backend.model,backend.tokenizer=model,Tokenizer()
+        backend.device,backend.torch,backend.is_hybrid='cpu',torch,True
+        backend.stats=[]
+        first=backend._generate([],[],30,max_tokens=2,controls=False)
+        second=backend._generate([],[],30,max_tokens=2,controls=False)
+        self.assertEqual(first,second)
+        self.assertFalse(backend.tokenizer.thinking)
+        self.assertEqual([s['cached_tokens'] for s in backend.stats],[0,0])
+
 
 if __name__ == '__main__': unittest.main()

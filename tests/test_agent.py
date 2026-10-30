@@ -7,14 +7,13 @@ from support import Env, call
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from lifemate.agent import parse_decision, run_agent
+from lifemate.agent import Decision, parse_decision, run_agent
 from lifemate.backend import LocalBackend
 from lifemate.prompts import apply_policy
 
 
 def decision(calls):
-    text = ''.join('<tool_call>'+json.dumps(c)+'</tool_call>' for c in calls) if calls else '[]'
-    return parse_decision(text)
+    return Decision(tool_calls=calls)
 
 
 class AgentTests(unittest.TestCase):
@@ -30,6 +29,19 @@ class AgentTests(unittest.TestCase):
                      '<tool_call>{"name":"x","arguments":"{}"}</tool_call>'):
             with self.subTest(text=text):
                 self.assertIsNotNone(parse_decision(text).protocol_error)
+
+    def test_qwen35_native_xml_uses_schema_types(self):
+        tools = [{'name':'service.act','parameters':{'properties':{
+            'amount':{'type':'integer'},'enabled':{'type':'boolean'},
+            'items':{'type':'array'},'note':{'type':'string'}}}}]
+        text = '<tool_call><function=service.act><parameter=amount>500000</parameter><parameter=enabled>True</parameter><parameter=items>[1,2]</parameter><parameter=note>  hello  </parameter></function></tool_call>'
+        result = parse_decision(text, tools)
+        self.assertIsNone(result.protocol_error)
+        self.assertEqual(result.tool_calls[0]['arguments'],
+                         {'amount':500000,'enabled':True,'items':[1,2],'note':'  hello  '})
+        self.assertIsNotNone(parse_decision(text.replace('500000','NaN'), tools).protocol_error)
+        self.assertIsNotNone(parse_decision(text.replace('</function>','<parameter=amount>1</parameter></function>'), tools).protocol_error)
+        self.assertIsNotNone(parse_decision('<think>reason</think>'+text, tools).protocol_error)
 
     def test_false_branch_still_allows_independent_action(self):
         env=Env({'condition.read':{'ok':True,'enabled':False}})

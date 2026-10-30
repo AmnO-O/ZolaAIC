@@ -1,8 +1,8 @@
-# LifeMate
+# LifeMate — Qwen3.5-4B trial
 
 One offline Vietnamese tool agent, one fixed policy, and a train-only supervised-learning path. Old memory/planning variants, Steerability, prompt switching, train priors, canonicalizers and experimental controllers have been removed. Previous implementations are in Git history.
 
-The untrained Qwen checkpoint is a control, not a validated solution. Reorganizing source does not establish better task accuracy. The next model experiment is a tool-use adapter trained on causal train trajectories.
+The current trial uses the official Qwen3.5-4B post-trained checkpoint without LifeMate fine-tuning, revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a (2026-03-02), with thinking disabled and a 16K input/output cap. The published full checkpoint is 4,659,865,088 parameters; the loader still checks actual loaded counts plus ASR. Native XML is decoded with schema types. This is a control, not a validated solution. Reorganizing source does not establish better task accuracy. The next model experiment is a tool-use adapter trained on causal train trajectories.
 
 ## Files
 
@@ -17,6 +17,8 @@ The untrained Qwen checkpoint is a control, not a validated solution. Reorganizi
 
 ## Kaggle
 
+First run [the three-sample trial](notebooks/kaggle_pipeline.ipynb) with reference transcripts, then real audio. Fresh model files download to models/qwen3.5-4b; do not reuse the old models/llm directory. Cross-turn cache is disabled for hybrid recurrent state, but generation still uses its native cache within each decision. The runtime uses BF16 where supported, otherwise FP16 (T4). GPU quality and runtime must be measured before training.
+
 1. [Train adapter](notebooks/kaggle_train.ipynb): private train data, default **one-step GPU smoke test** using 8 train and 2 validation examples. Set `MAX_STEPS=-1` only after the smoke test succeeds to train one full epoch. T4 VRAM/runtime remain to be measured.
 2. [Evaluate on train](notebooks/kaggle_pipeline.ipynb): set `ADAPTER_PATH` to the adapter and `IDS_FILE` to the prepared `manifest.json` to select validation IDs. First compare base vs adapter on reference transcripts; then repeat with real Gipformer audio. Default development budget is 90 seconds, not competition compliant.
 3. [Public inference](notebooks/kaggle_public_test.ipynb): real audio, all samples, 27-second internal budget. Validate complete output before manual submission. No automatic leaderboard submission or test-label tuning.
@@ -29,7 +31,7 @@ Training dependencies are in `requirements-train.txt`; inference without an adap
 python -m pip install -r requirements-train.txt
 python scripts/download_models.py
 python scripts/prepare_sft.py --train-dir /path/to/train --output artifacts/sft
-python scripts/train_adapter.py --model models/llm --data artifacts/sft --output artifacts/smoke --smoke
+python scripts/train_adapter.py --model models/qwen3.5-4b --data artifacts/sft --output artifacts/smoke --smoke
 ```
 
 For inference, set `LIFEMATE_LLM_PATH`, `LIFEMATE_ASR_PATH`, `PYTHONHASHSEED=42`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, and optionally `LIFEMATE_ADAPTER_PATH`. The backend merges a local adapter into the base before inference and checks its policy hash. Then:

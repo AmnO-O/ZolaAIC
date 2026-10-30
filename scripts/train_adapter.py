@@ -31,7 +31,7 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
     import torch
-    from transformers import (AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig,
+    from transformers import (AutoTokenizer, AutoModelForCausalLM, AutoConfig, Qwen3_5ForConditionalGeneration, BitsAndBytesConfig,
                               Trainer, TrainingArguments, set_seed)
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     if not torch.cuda.is_available():
@@ -67,7 +67,9 @@ def main():
         raise ValueError('Need nonempty train and validation after length checks; no silent truncation')
     quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type='nf4',
                               bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=torch.float16)
-    model = AutoModelForCausalLM.from_pretrained(args.model, local_files_only=True,
+    model_config = AutoConfig.from_pretrained(args.model, local_files_only=True)
+    loader = Qwen3_5ForConditionalGeneration if model_config.model_type == 'qwen3_5' else AutoModelForCausalLM
+    model = loader.from_pretrained(args.model, local_files_only=True,
                 quantization_config=quant, device_map={'': 0}, torch_dtype=torch.float16,
                 attn_implementation='sdpa')
     model.config.use_cache = False

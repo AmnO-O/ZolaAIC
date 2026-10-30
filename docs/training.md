@@ -8,7 +8,7 @@ prepare_sft.py accepts only the train catalog/JSONL. It does not read final_stat
 
 The split groups casefolded transcripts with numeric runs masked, using a fixed hash seed. The known development IDs train_0001..train_0061 and exact text groups are excluded from validation. This is conservative bookkeeping, not proof of complete template separation; related paraphrases may cross groups. If other IDs were already inspected, add them to configs/development_ids.json before preparing data. All steps of a sample stay in one partition. The manifest records IDs, source/catalog/policy hashes and rejected trajectories. No priors derived from validation are injected into inference.
 
-Assistant-only labels mask context, schemas, user text and observed results. The actual tokenizer must demonstrate an exact generation-prefix match; template mismatch fails. Long examples are recorded and skipped, never silently truncated. Training defaults to max length 8192, while inference supports 16384. Inspect retained/skipped distributions before a full run.
+Assistant-only labels mask context, schemas, user text and observed results. The actual template must demonstrate an exact text-prefix match; template mismatch fails. Prefix and completion are encoded separately at the generation boundary, because BPE can merge trailing prompt whitespace with the first completion token. Long examples are recorded and skipped, never silently truncated. Training defaults to max length 8192, while inference supports 16384. Inspect retained/skipped distributions before a full run.
 
 ## Training
 
@@ -23,3 +23,5 @@ QLoRA implementation follows the official PEFT quantization workflow: https://hu
 Use manifest validation IDs for both frozen base and adapter, with the same policy, schemas, decoding, logging, deadlines and hardware. Start with train reference text; then repeat with ASR audio. Compare per-sample diagnostic tool F1, exact complete call matches, errors, call count, premature stops and latency. Validation loss is not task accuracy. Do not repeatedly edit prompts after inspecting validation failures and still call it untouched holdout.
 
 Public/private test must not be labelled or used for training/tuning. Exported train examples and all outputs remain private. The current diagnostic matcher and optional state-gated proxy are not a verified official scorer. No GPU accuracy, runtime or compliance claim is supported by CPU tests alone.
+
+Training is paused while evaluating the unadapted Qwen3.5-4B base. Old adapters/data prepared under the JSON prompt must be regenerated; policy hashes differ. The official template now emits XML, with enable_thinking=False in both inference and supervised encoding.

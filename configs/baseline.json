@@ -1,11 +1,15 @@
 {
   "llm": {
-    "id": "Qwen/Qwen3-4B-Instruct-2507",
-    "revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+    "id": "Qwen/Qwen3.5-4B",
+    "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
     "license": "Apache-2.0",
-    "commit_date": "2025-09-17",
+    "commit_date": "2026-03-02",
     "max_context_tokens": 16384,
-    "max_new_tokens": 384
+    "max_new_tokens": 384,
+    "enable_thinking": false,
+    "architecture": "qwen3_5",
+    "checkpoint_parameters": 4659865088,
+    "local_dir": "models/qwen3.5-4b"
   },
   "asr": {
     "id": "g-group-ai-lab/gipformer1.5-68M-rnnt",
@@ -24,9 +28,8 @@
       "joiner.int8.onnx"
     ]
   },
-  "prompt_mode": "system",
   "seed": 42,
   "sample_budget_seconds": 27,
-  "status": "Single pipeline and causal SFT path; untrained base is a control, not a validated solution",
+  "status": "Qwen3.5-4B untrained trial; GPU compatibility, accuracy and latency pending",
   "controller": "single"
 }

@@ -69,12 +69,17 @@ def encode_example(example, tokenizer, max_length=16384):
     messages = apply_policy(chat_messages(example['messages']))
     target = chat_messages([example['target']])[0]
     tools = native_tools(example['tools'])
-    prefix = tokenizer.apply_chat_template(messages, tools=tools,
-                                          tokenize=True, add_generation_prompt=True)
-    full = tokenizer.apply_chat_template(messages + [target], tools=tools,
-                                        tokenize=True, add_generation_prompt=False)
-    if full[:len(prefix)] != prefix:
-        raise ValueError('Chat template prefix differs between generation and training')
+    prefix_text = tokenizer.apply_chat_template(messages, tools=tools,
+        tokenize=False, add_generation_prompt=True, enable_thinking=False)
+    full_text = tokenizer.apply_chat_template(messages + [target], tools=tools,
+        tokenize=False, add_generation_prompt=False, enable_thinking=False)
+    if not full_text.startswith(prefix_text):
+        raise ValueError('Chat template text prefix differs between generation and training')
+    # Encode at the generation boundary: BPE may otherwise merge the prompt's
+    # final whitespace with the first response token in the full conversation.
+    prefix = tokenizer.encode(prefix_text, add_special_tokens=False)
+    response = tokenizer.encode(full_text[len(prefix_text):], add_special_tokens=False)
+    full = prefix + response
     if len(full) > max_length:
         return None
     if len(full) <= len(prefix):

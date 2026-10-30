@@ -32,11 +32,14 @@ def sample(identifier='train_x', text='Change the item'):
 
 class Tokenizer:
     """Deterministic template stub makes the prefix/target boundary observable."""
-    def apply_chat_template(self, messages, tools, tokenize, add_generation_prompt):
+    def apply_chat_template(self, messages, tools, tokenize, add_generation_prompt, **kwargs):
         text = json.dumps(messages[:-1] if not add_generation_prompt else messages, sort_keys=True)
         text += '<assistant>'
         if not add_generation_prompt:
             text += json.dumps(messages[-1], sort_keys=True) + '<eos>'
+        return list(text.encode()) if tokenize else text
+
+    def encode(self, text, add_special_tokens=False):
         return list(text.encode())
 
 
