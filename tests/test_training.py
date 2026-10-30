@@ -19,6 +19,9 @@ TOOLS = [
 ]
 
 
+CATALOG = {'apps': [{'id': 'app', 'description': 'Find and modify entries', 'tools': TOOLS}]}
+
+
 def sample(identifier='train_x', text='Change the item'):
     return {'id': identifier, 'audio_text': text, 'history': [],
             'context': {'installed_apps': {'app': {'tools': ['app.find', 'app.modify']}}},
@@ -46,7 +49,9 @@ class Tokenizer:
 class TrainingTests(unittest.TestCase):
     def test_no_target_or_future_result_in_input(self):
         row = sample(); original = copy.deepcopy(row)
-        examples = trajectory_examples(row, TOOLS)
+        examples = trajectory_examples(row, TOOLS, CATALOG)
+        self.assertEqual(examples[0]['messages'][0]['content']['context']['installed_apps'],
+                         {'app': 'Find and modify entries'})
         self.assertEqual(len(examples), 3)
         self.assertNotIn('UNIQUE_FUTURE_ID', str(examples[0]['messages']))
         self.assertIn('UNIQUE_FUTURE_ID', str(examples[1]['messages']))
@@ -57,18 +62,18 @@ class TrainingTests(unittest.TestCase):
 
     def test_empty_and_clarification_trajectories(self):
         row = sample(); row['label'] = {'tool_calls': [], 'tool_results': []}
-        self.assertEqual(trajectory_examples(row, TOOLS)[0]['target']['content'], '[]')
+        self.assertEqual(trajectory_examples(row, TOOLS, CATALOG)[0]['target']['content'], '[]')
         row['label'] = {'tool_calls': [{'name': 'sys.ask_missing_info', 'arguments': {}}],
                         'tool_results': [{'ok': True, 'waiting_for_user': True}]}
-        self.assertEqual(len(trajectory_examples(row, TOOLS)), 1)
+        self.assertEqual(len(trajectory_examples(row, TOOLS, CATALOG)), 1)
 
     def test_unpaired_and_unavailable_gold_is_rejected(self):
         row = sample(); row['label']['tool_results'].pop()
-        with self.assertRaises(ValueError): trajectory_examples(row, TOOLS)
-        with self.assertRaises(ValueError): trajectory_examples(sample(), TOOLS[:1])
+        with self.assertRaises(ValueError): trajectory_examples(row, TOOLS, CATALOG)
+        with self.assertRaises(ValueError): trajectory_examples(sample(), TOOLS[:1], CATALOG)
 
     def test_assistant_only_loss_no_truncation(self):
-        example = trajectory_examples(sample(), TOOLS)[0]
+        example = trajectory_examples(sample(), TOOLS, CATALOG)[0]
         encoded = encode_example(example, Tokenizer())
         self.assertEqual(len(encoded['input_ids']), len(encoded['labels']))
         first = next(i for i, value in enumerate(encoded['labels']) if value != -100)
@@ -87,7 +92,7 @@ class TrainingTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory(dir=root/'artifacts') as temp:
             directory = Path(temp)/'train'; directory.mkdir()
-            (directory/'train_tools_catalog.json').write_text(json.dumps({'apps': [{'tools': TOOLS}]}))
+            (directory/'train_tools_catalog.json').write_text(json.dumps(CATALOG))
             row = sample('known')
             # Select a text whose hash normally places it in validation.
             for i in range(500):

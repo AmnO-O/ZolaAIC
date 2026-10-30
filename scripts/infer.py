@@ -104,7 +104,7 @@ def main():
                     if detail:
                         detail.emit('asr.output', output={'text': text, 'scope': scope}, seconds=time.monotonic()-began)
                     return text
-                context_payload = clean_context_for_prompt(item['context'])
+                context_payload = clean_context_for_prompt(item['context'], split.catalog)
                 messages = [{'role': 'system', 'content': {'context': context_payload}}]
                 for turn in item['history']:
                     if turn['role'] == 'user':

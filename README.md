@@ -4,6 +4,8 @@ One offline Vietnamese tool agent, one fixed policy, and a train-only supervised
 
 The current trial uses the official Qwen3.5-4B post-trained checkpoint without LifeMate fine-tuning, revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a (2026-03-02), with thinking disabled and a 16K input/output cap. The published full checkpoint is 4,659,865,088 parameters; the loader still checks actual loaded counts plus ASR. Native XML is decoded with schema types. This is a control, not a validated solution. Reorganizing source does not establish better task accuracy. The next model experiment is a tool-use adapter trained on causal train trajectories.
 
+Prompt context uses a single `installed_apps` dictionary mapping installed app IDs to descriptions from the split catalog. It emits no separate app-description list and adds no app-wide prefix to tool descriptions. Inference and SFT preparation use the same formatter. Regenerate prepared SFT examples after updating this prompt/context format.
+
 ## Files
 
 - `src/lifemate/agent.py`: native-call parser and the only execution loop.

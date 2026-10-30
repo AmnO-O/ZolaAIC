@@ -17,7 +17,7 @@ class RunnerTests(unittest.TestCase):
             split=base/'train'
             runtime=split/'zaic_tools'
             runtime.mkdir(parents=True)
-            (split/'train_tools_catalog.json').write_text(json.dumps({'apps':[{'tools':[
+            (split/'train_tools_catalog.json').write_text(json.dumps({'apps':[{'id':'memo','description':'Create and manage memos','tools':[
                 {'name':'memo.create','parameters':{'type':'object','properties':{'text':{'type':'string'}}}}]}]}))
             (split/'train.jsonl').write_text(json.dumps({'id':'invented_1','audio':'audio/a.wav',
                 'audio_text':'REFERENCE_MUST_NOT_LEAK','label':{'secret':'LABEL_MUST_NOT_LEAK'},
@@ -52,6 +52,9 @@ class Backend:
   if os.environ.get('SIMULATE_FAILURE')=='1':raise RuntimeError('invented model failure')
   assert 'REFERENCE_MUST_NOT_LEAK' not in str(messages)
   assert 'LABEL_MUST_NOT_LEAK' not in str(messages)
+  assert messages[0]['content']['context']['installed_apps']=={'memo':'Create and manage memos'}
+  assert 'app_descriptions' not in messages[0]['content']['context']
+  assert all('_app_description' not in t for t in tools)
   if any(m['role']=='tool' for m in messages):
    return []
   return [{'name':'memo.create','arguments':{'text':'invented memo'}}]

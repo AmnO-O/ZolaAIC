@@ -35,7 +35,7 @@ def prepare(directory, output, development_ids=(), seed=42, validation_percent=1
             partition = ('validation' if split_group(row['audio_text']) not in dev_groups
                          and validation_group(row['audio_text'], seed, validation_percent) else 'train')
             try:
-                examples = trajectory_examples(row, split.tools(row))
+                examples = trajectory_examples(row, split.tools(row), split.catalog)
             except (ValueError, KeyError, TypeError) as error:
                 manifest['rejected'].append({'id': row['id'], 'error': str(error)})
                 continue

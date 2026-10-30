@@ -11,7 +11,7 @@ from .prompts import apply_policy
 from .values import annotate_spoken_phones
 
 
-def trajectory_examples(row, tools):
+def trajectory_examples(row, tools, catalog):
     """One observed action per target. Never put target/future results in input."""
     calls = row['label']['tool_calls']
     results = row['label']['tool_results']
@@ -19,7 +19,7 @@ def trajectory_examples(row, tools):
         raise ValueError('Unpaired gold calls/results: ' + row['id'])
     allowed = {t['name']: t for t in tools}
     messages = [{'role': 'system', 'content': {
-        'context': clean_context_for_prompt(row['context'])}}]
+        'context': clean_context_for_prompt(row['context'], catalog)}}]
     for turn in row.get('history', []):
         if turn['role'] == 'user':
             messages.append({'role': 'user', 'content': annotate_spoken_phones(turn['audio_text'])})
