@@ -1,3 +1,7 @@
+# Current default: direct_v2
+
+Both notebooks now select `PROMPT_VARIANT="direct"`. Read [direct baseline](../docs/direct_baseline.md). The train notebook retains its 90-second development budget; the public notebook retains 27 seconds. Run TRAIN_TRANSCRIPTS=True only on train to isolate tool use, then repeat with real ASR. Full logging is useful for diagnosis; disable it for timing comparisons. Historical variant instructions below apply only when explicitly selecting those modes.
+
 # Kaggle notebook
 
 For a full public-test submission, use [kaggle_public_test.ipynb](kaggle_public_test.ipynb). It fixes the split to `public_test`, defaults to `LIMIT=None` (all samples), audio inference, deterministic mode, full installed tools, a 27-second budget, and detailed logging off. It prints sample progress and saves logs/timing. There is no train evaluation or reference-transcript path. After checking complete IDs, JSON structure, permitted tool names, and SHA-256 hash format, it exports `/kaggle/working/result/submission.jsonl` for manual download/submission. A subset, duplicate IDs, missing rows, or failed inference process prevents final export. This validation does not prove state correctness or compute the official score. Existing final results are never overwritten with different content.
@@ -12,7 +16,7 @@ For a controlled comparison, run the same train IDs twice with identical budget,
 
 Calls pass through schema/evidence validation without semantic argument rewrites. One ToolEnv is created per sample. If session creation/export fails, remaining samples continue, but the result is partial and the process exits nonzero. This new pipeline needs fresh GPU accuracy and timing measurements; previous Baseline A scores do not describe it.
 
-Import [kaggle_pipeline.ipynb](kaggle_pipeline.ipynb) into a new **private** Kaggle notebook using **File â†’ Import Notebook** (or upload it when creating a notebook).
+Import [kaggle_pipeline.ipynb](kaggle_pipeline.ipynb) into a new **private** Kaggle notebook using **File Ã¢â€ â€™ Import Notebook** (or upload it when creating a notebook).
 
 1. Attach the private dataset `amnpham/zalochallenge` with **Add Input**.
 2. Select a GPU and enable Internet for cloning, dependencies, and model downloads.

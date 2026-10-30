@@ -10,14 +10,17 @@ INSTRUCTION = (Path(__file__).parent / 'prompt_assets/system.txt').read_text(enc
 class PromptControls:
     def __init__(self, mode='system'):
         self.variant = os.environ.get('LIFEMATE_PROMPT_VARIANT', 'clean')
-        if self.variant not in ('clean', 'planning', 'memory_full', 'memory_compact'):
-            raise ValueError('Use clean, planning, memory_full or memory_compact; legacy prompt variants were removed')
+        if self.variant not in ('direct', 'clean', 'planning', 'memory_full', 'memory_compact'):
+            raise ValueError('Use direct, clean, planning, memory_full or memory_compact; legacy prompt variants were removed')
         if mode not in ('baseline', 'system'):
             raise ValueError('Prompt mode must be baseline or system; legacy few-shot mode was removed')
         self.mode = mode
         if mode == 'baseline':
             if self.variant != 'clean':
                 raise ValueError('Planning and memory variants require system prompt controls')
+            return
+        if self.variant == 'direct':
+            self.instruction = (Path(__file__).parent / 'prompt_assets/direct.txt').read_text(encoding='utf-8')
             return
         source = os.environ.get('LIFEMATE_STEERABILITY_PATH')
         if source is None:
@@ -37,4 +40,11 @@ class PromptControls:
         batch = [copy.deepcopy(messages)]
         if self.mode == 'baseline':
             return batch[0]
+        if self.variant == 'direct':
+            output = batch[0]
+            if output and output[0]['role'] == 'system':
+                output[0]['content'] = self.instruction + '\n' + output[0]['content']
+            else:
+                output.insert(0, {'role': 'system', 'content': self.instruction})
+            return output
         return self.system.adapt_messages(batch)[0]

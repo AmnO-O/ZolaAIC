@@ -72,6 +72,9 @@ class LocalBackend:
 
     def decide(self, messages, tools, remaining_seconds):
         text = self._generate(messages, tools, remaining_seconds)
+        if self.prompt_controls.variant == 'direct':
+            from .direct import parse_direct_response
+            return parse_direct_response(text)
         if self.prompt_controls.variant == 'planning':
             from .planning import parse_planning_response
             return parse_planning_response(text)

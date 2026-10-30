@@ -27,5 +27,7 @@
   "prompt_mode": "system",
   "seed": 42,
   "sample_budget_seconds": 27,
-  "status": "General system prompt and schema/evidence harness; new GPU evaluation required"
+  "status": "Direct native-action baseline; synthetic checks only until a new GPU benchmark is recorded",
+  "controller": "direct_v2",
+  "prompt_variant": "direct"
 }

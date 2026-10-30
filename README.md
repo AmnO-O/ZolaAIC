@@ -1,79 +1,52 @@
-# ZolaAIC — offline Vietnamese tool agent
+# LifeMate — Direct baseline v2
 
-Source for a Vietnamese voice assistant using **Gipformer 1.5 68M RNN-T**, **Qwen3-4B-Instruct-2507**, and the actual Steerability SystemPrompt control. Model weights are frozen. No fine-tuning or RL is included.
+Offline Vietnamese tool agent: **Gipformer 1.5 68M CPU INT8 -> Qwen3-4B-Instruct-2507 GPU FP16 -> native actions -> evidence/schema validation -> organiser ToolEnv -> observations**.
 
-Audio and conversation history → local ASR → controlled LLM tool calls → organiser ToolEnv → `submission.jsonl`.
+The new default is `direct`, implemented in `src/lifemate/direct.py` with instructions in `src/lifemate/prompt_assets/direct.txt`. No generated memory, plan, reviewer, train-prior policy, keyword router, automatic parameter rewriting or semantic completion oracle. It retains full observed history and passes arguments unchanged. Historical variants remain selectable for comparisons, outside the default controller.
 
-Runtime responsibilities, compatibility guarantees, and remaining semantic
-heuristics are documented in [the architecture guide](docs/architecture.md).
-The general prompt lives in `src/lifemate/prompt_assets/system.txt`; optional
-planning instructions live in `planning.txt`. See [planning development](docs/planning.md).
-Validation uses schemas and observed evidence; it does not rewrite intent.
+Model assets, seeds, greedy decoding and deterministic algorithms remain pinned. All permitted tools are exposed. Exact-prefix KV caching and the 16,384-token context ceiling are preserved. This is an untrained baseline: no accuracy improvement or A30 runtime compliance is claimed before GPU evaluation.
 
-For Kaggle, import [notebooks/kaggle_pipeline.ipynb](notebooks/kaggle_pipeline.ipynb) and follow the [notebook instructions](notebooks/README.md). It clones this repository, prepares models, and runs on your attached dataset.
+## Kaggle
 
-To generate a complete public-test submission, use [notebooks/kaggle_public_test.ipynb](notebooks/kaggle_public_test.ipynb). It runs all public audio samples, reports progress, and validates complete coverage/structure before exporting `result/submission.jsonl` for manual submission. It does not access train labels, compute public-test accuracy, or submit automatically.
+Import [train/debug notebook](notebooks/kaggle_pipeline.ipynb), attach the authorised private dataset `amnpham/zalochallenge`, select GPU and enable Internet for setup. It clones this repository and downloads pinned models. Inference uses local assets and offline Hugging Face flags.
 
-The pipeline uses one bounded observe-act controller: the model may return several independent tool calls per decision, and the loop stops on an empty decision, a clarification request, a configurable decision limit (eight by default), or the deadline. There is no separate planner model. The optional `planning` variant produces a brief initial action plan alongside native calls and revises remaining work only when observations require it. Every decision receives the full permitted schemas. Keyword routing, continuation nudges and task-specific argument rewriting have been removed.
+Default settings: `PROMPT_VARIANT="direct"`, train development IDs, 90-second budget, 16 decisions, detailed logs. Set `TRAIN_TRANSCRIPTS=True` for the first tool-reasoning diagnostic; then repeat with False for real Gipformer audio. Train reference transcripts must never be used for test splits. Run a frozen configuration on fresh train IDs before interpreting improvements.
 
-The controller passes proposed arguments unchanged after allowlist, evidence and organiser schema validation. It grounds IDs and phone numbers in successful observations or explicit user data. The model resolves dates, addresses, conditions and multi-action intent from the supplied context and tools. The harness does not infer branch outcomes, append event end times, rewrite destinations, or choose payment sources. This is not a guarantee of semantic correctness.
+[Public-test notebook](notebooks/kaggle_public_test.ipynb) defaults to real audio, all samples, 27 seconds and 8 decisions. It validates coverage/format and exports result/submission.jsonl for manual submission. It neither scores public accuracy nor submits automatically. A larger development budget does not satisfy the competition's 30-second limit.
 
-General system instructions are written in English; no few-shot demonstrations are injected. User requests, ASR transcripts, profile values, tool results, and catalog descriptions retain their supplied language. Tool names and schemas are preserved exactly. The language change has not been benchmarked for accuracy or speed.
+See [execution and evaluation protocol](docs/direct_baseline.md).
 
-## Setup
+## Local setup
 
-Use Python 3.11+ and a CUDA-capable environment for the LLM:
+Python 3.11+, CUDA GPU for LLM, organiser package obtained separately:
 
 ```bash
-python -m venv .venv
-# Activate the environment for your shell.
 python -m pip install -r requirements.txt
 python scripts/download_models.py
-```
-
-Downloads happen during setup. Inference loads local assets only. Gipformer uses CPU INT8 greedy decoding with four threads; the LLM uses GPU FP16. For an ASR-only environment, install `requirements-asr.txt` and download with `--component asr`.
-
-The unmodified Steerability Python source is included under `vendor/steerability`, with its LICENSE, NOTICE, and source hash manifest. No separate Steerability checkout or full toolkit installation is required. `scripts/prepare_steerability.py --source /path/to/steerability` can regenerate this vendor copy from a local checkout.
-
-## Inference
-
-Obtain the authorised competition package separately. Point `--split-dir` at a split containing its JSONL, tool catalog, audio, and supplied `zaic_tools`. The solution accesses app data through one ToolEnv per sample.
-
-Set these environment variables (PowerShell uses `$env:NAME="value"`):
-
-```bash
+export PYTHONPATH="$PWD/src"
 export LIFEMATE_LLM_PATH="$PWD/models/llm"
 export LIFEMATE_ASR_PATH="$PWD/models/asr"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export PYTHONHASHSEED=42
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
-python scripts/infer.py --split-dir /path/to/public_test --backend lifemate.backend:create_backend --output result/submission.jsonl
+python scripts/infer.py --split-dir /data --backend lifemate.backend:create_backend --prompt-variant direct --output result/submission.jsonl
 ```
 
-The runner refuses to overwrite an existing output. Defaults: `LIFEMATE_ASR_KIND=gipformer`, `LIFEMATE_PROMPT_MODE=system`, 27-second sample budget, and a 16,384-token context limit. `baseline` omits system controls for diagnostics. Old prompt variants and the `steerability` few-shot mode are retired; use historical commits to reproduce those experiments. The competition target is 30 seconds per sample; A30 timing and deployment validation are pending.
+Output creation is exclusive: an existing run is never silently overwritten. Optional `--step-log result/steps.jsonl --verbose-steps` records and prints full processing inputs/outputs. Logs are separate from submissions and contain private context. Disable detailed logging for timing measurements.
 
-Session/export failures are isolated per sample, with no retry or fabricated state hash. Later samples still run. If a real output row cannot be exported, it is omitted, marked `missing_submission_row` in the trace, and the process exits nonzero after the batch. That output is partial and must not be treated as a complete submission. Failed actual tool calls remain in the exported environment log. Attempted and successful actions are recorded separately.
+## Guarantees and limits
 
-For development, add `--step-log result/steps.jsonl --verbose-steps` to save every query's observed processing inputs/outputs and print full step inputs/outputs live. The notebook enables this by default and provides an expandable query viewer. Full prompts, tool responses, and context remain in this separate private diagnostic file; the submission schema stays unchanged. Disable detailed logging when measuring runtime.
+One ToolEnv per sample, only organiser APIs for app data, actual calls and final hash exported from that same environment. No direct reads of environment files. Failed actual calls remain in submission. Proposed or rejected-before-execution calls stay in diagnostics only. Seeds/greedy decoding do not substitute for reproducibility checks on scoring hardware.
 
-## Development
+Only native calls or explicit [] are accepted; malformed output gets one bounded correction. Validation feedback explicitly marks nonexecution. Failed and uncertain writes are not completed. Uncertain mutations stop execution rather than being retried automatically. The ledger blocks identical successful writes; intentional identical repeats are a known limitation.
 
-The generic Kaggle notebook defaults to `PROMPT_VARIANT="planning"`, 90 seconds
-and 16 decisions for robustness experiments. This development budget is not
-competition compliant. The runner and public notebook retain `clean`/27-second
-defaults. Compare clean and planning on identical train IDs and settings.
+`finished` means the model requested a stop, not independently verified task success. Conditions, matching candidates, amounts, times, missing information and semantic completeness remain model responsibilities. Tools run sequentially; the harness does not infer a dependency graph. Generation, validation and execution have deadline checks, but blocking native operations may overrun before returning.
+
+## Verification
 
 ```bash
 python -B -m unittest discover -s tests -v
 ```
 
-The local tests cover prompt integration, tool parsing, ASR configuration, controller behavior, prompt-cache correctness, and submission export with synthetic fixtures. Cache tests include greedy-output parity against uncached generation using a tiny, randomly initialized Qwen model. They do not require competition data or downloaded models. An actual offline CPU ASR smoke also passed; no new end-to-end accuracy improvement is claimed.
-
-Prompt KV reuse is enabled within each sample and reset between samples. The backend checks exact token prefixes and crops mismatching suffixes before reuse. Set `LIFEMATE_PROMPT_CACHE=0` to disable it. Detailed traces record cache hits and prefill/generation wall times; GPU speedups remain to be measured.
-
-`scripts/evaluate.py` provides train-only diagnostic evaluation; it is not an official scorer. Reference transcripts and labels must remain development-only.
-
-See [PIPELINE.md](PIPELINE.md) for the implemented architecture. `configs/baseline.json` records pinned model revisions. Some generation limits are also enforced directly in the backend; this file is not a general runtime configuration loader.
-
-This repository contains source, tests, dependencies, and vendor licences. Competition data, organiser runtime code, model weights, credentials, experiment outputs, and Docker packaging are excluded. Third-party source retains its own licence; this repository grants no rights to restricted competition data or model assets.
+Synthetic tests exercise parsing, evidence boundaries, call/result pairing, failure recovery, actual-call export, CLI isolation and notebook compilation. They do not measure the model's decision quality. Train metrics in scripts/evaluate.py and scripts/evaluate_run.py are diagnostic; optional state-gated F1 is an unverified scoring proxy. Historical research notes are not organiser scoring specifications.

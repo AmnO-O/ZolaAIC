@@ -1,3 +1,9 @@
+# Historical local diagnostic probes — not an organiser contract
+
+The following notes describe our own evaluation.py, not verified official scoring. Architectural prescriptions and claims of 100% correctness in the historical text are not runtime requirements. Observing no nulls in train does not prove null deletion safe; optional argument sets cannot be known at inference from gold labels. The direct baseline passes arguments unchanged. Do not use these notes as evidence of the official leaderboard equation.
+
+---
+
 # HỢP ĐỒNG ĐÁNH GIÁ (EVALUATOR CONTRACT)
 *Được kiểm chứng thực nghiệm 100% bằng probe suite `scripts/evaluator_probe.py` và `scripts/extended_evaluator_probe.py` trên `src/lifemate/evaluation.py`.*
 

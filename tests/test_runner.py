@@ -71,7 +71,7 @@ def create():return Backend()
             environment['RESET_LOG']=str(base/'resets.txt')
             result=subprocess.run([sys.executable,'-B',str(root/'scripts/infer.py'),
                 '--split-dir',str(split),'--backend','fake_backend:create','--budget-seconds','60','--output',str(output),
-                '--step-log',str(base/'steps.jsonl'),'--verbose-steps'],
+                '--step-log',str(base/'steps.jsonl'),'--verbose-steps','--prompt-variant','direct'],
                 env=environment,capture_output=True,text=True,timeout=20)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(len((base/'resets.txt').read_text().splitlines()),2)
@@ -80,6 +80,8 @@ def create():return Backend()
             self.assertEqual(row['state_hash'],'0'*64)
             trace=json.loads(output.with_suffix('.trace.jsonl').read_text())
             self.assertEqual(trace['termination'],'finished')
+            self.assertEqual(trace['controller'], 'direct_v2')
+            self.assertFalse(trace['task_success_verified'])
             self.assertEqual(trace['budget_seconds'],60)
             raw_steps=(base/'steps.jsonl').read_text(encoding='utf-8')
             self.assertNotIn('REFERENCE_MUST_NOT_LEAK',raw_steps)
