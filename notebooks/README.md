@@ -6,13 +6,13 @@ To run it: import into a private Kaggle notebook, attach `amnpham/zalochallenge`
 
 The generic notebook below remains useful for small train/debug runs with full step inspection.
 
-Both notebooks use `PROMPT_MODE="system"`, full permitted tools, and no static few-shot examples. The generic train/debug notebook defaults to `PROMPT_VARIANT="planning"`, `BUDGET_SECONDS=90`, `MAX_TURNS=16`, with detailed logs. This is a development configuration for correctness, not a competition-compliant run. The public notebook retains `PROMPT_VARIANT="clean"`, 27 seconds and 8 decisions.
+Both notebooks use `PROMPT_MODE="system"`, full permitted tools, and no static few-shot examples. The generic train/debug notebook defaults to `PROMPT_VARIANT="clean"`, `BUDGET_SECONDS=90`, `MAX_TURNS=16`, with detailed logs. This is a development configuration for correctness, not a competition-compliant run. The public notebook retains `PROMPT_VARIANT="clean"`, 27 seconds and 8 decisions.
 
 For a controlled comparison, run the same train IDs twice with identical budget, decision limit, models, seeds and logging: first `PROMPT_VARIANT="clean"`, then `"planning"`. Each run gets its own directory. Planning logs initial/revised plans alongside native calls and records actual execution outcomes separately. It does not add a planner model or change submission format.
 
 Calls pass through schema/evidence validation without semantic argument rewrites. One ToolEnv is created per sample. If session creation/export fails, remaining samples continue, but the result is partial and the process exits nonzero. This new pipeline needs fresh GPU accuracy and timing measurements; previous Baseline A scores do not describe it.
 
-Import [kaggle_pipeline.ipynb](kaggle_pipeline.ipynb) into a new **private** Kaggle notebook using **File → Import Notebook** (or upload it when creating a notebook).
+Import [kaggle_pipeline.ipynb](kaggle_pipeline.ipynb) into a new **private** Kaggle notebook using **File â†’ Import Notebook** (or upload it when creating a notebook).
 
 1. Attach the private dataset `amnpham/zalochallenge` with **Add Input**.
 2. Select a GPU and enable Internet for cloning, dependencies, and model downloads.
@@ -35,3 +35,5 @@ Detailed query tracing is enabled by default with `STEP_LOGGING = True`. With `L
 After importing the updated notebook, restart the Kaggle session and run from the first cell. The setup supports `REVISION="main"` or an exact commit and rejects source versions that predate the clean pipeline.
 
 See [planning protocol and stopping rules](../docs/planning.md) before interpreting `finished`, `no_progress`, `protocol_error`, or `uncertain_outcome`. A clean plan or a normal loop exit does not prove task completion.
+
+Working memory: see [experiment protocol](../docs/working_memory.md). Train notebook now defaults to clean (A); choose memory_full (B) or memory_compact (C) manually with identical settings. The public default remains clean.

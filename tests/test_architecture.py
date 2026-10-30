@@ -91,7 +91,7 @@ class BoundaryTests(unittest.TestCase):
                     compile(code, f'{path.name}:{index}', 'exec')
                     source += code
             self.assertIn('PROMPT_MODE = "system"', source)
-            self.assertIn('PROMPT_VARIANT = "' + ('planning' if path.name == 'kaggle_pipeline.ipynb' else 'clean') + '"', source)
+            self.assertIn('PROMPT_VARIANT = "clean"', source)
             self.assertNotIn('TOOL_PRUNING', source)
             self.assertNotIn('b_cond', source)
 

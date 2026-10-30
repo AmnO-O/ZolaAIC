@@ -52,6 +52,10 @@ class Backend:
   if os.environ.get('SIMULATE_FAILURE')=='1':raise RuntimeError('invented model failure')
   assert 'REFERENCE_MUST_NOT_LEAK' not in str(messages)
   assert 'LABEL_MUST_NOT_LEAK' not in str(messages)
+  if os.environ.get('LIFEMATE_PROMPT_VARIANT','').startswith('memory_'):
+   from lifemate.planning import Decision
+   if any(m['role']=='tool' for m in messages):return Decision(memory_update='No remaining work')
+   return Decision(tool_calls=[{'name':'memo.create','arguments':{'text':'invented memo'}}],memory_update='Create memo')
   if os.environ.get('LIFEMATE_PROMPT_VARIANT')=='planning':
    from lifemate.planning import Decision
    if any(m['role']=='tool' for m in messages):return Decision(plan_update='No remaining work')
@@ -138,6 +142,25 @@ def create():return Backend()
             self.assertEqual(partial_trace[0]['error_type'],'RuntimeError')
             self.assertEqual(partial_trace[1]['termination'],'finished')
             self.assertEqual(len((base/'resets.txt').read_text().splitlines()),10)
+            # Exercise both new modes through the actual CLI, including fresh per-sample environments.
+            for variant in ('memory_full', 'memory_compact'):
+                target = base/(variant + '.jsonl')
+                creations = base/(variant + '.creations.txt')
+                run = subprocess.run([sys.executable, '-B', str(root/'scripts/infer.py'),
+                    '--split-dir', str(split), '--backend', 'fake_backend:create',
+                    '--output', str(target), '--prompt-variant', variant,
+                    '--step-log', str(base/(variant + '.steps.jsonl'))],
+                    env={**environment, 'ENV_CREATION_LOG': str(creations)},
+                    capture_output=True, text=True, timeout=20)
+                self.assertNotEqual(run.returncode, 0)  # synthetic broken sample remains isolated
+                self.assertEqual(creations.read_text().splitlines(), ['broken', 'good'])
+                exported = json.loads(target.read_text())
+                self.assertEqual(exported['tool_calls'], row['tool_calls'])
+                self.assertEqual(set(exported), {'id', 'tool_calls', 'state_hash'})
+                traces = [json.loads(line) for line in target.with_suffix('.trace.jsonl').read_text().splitlines()]
+                self.assertEqual(traces[1]['memory_mode'], variant)
+                self.assertEqual(len(traces[1]['memory_revisions']), 2)
+                self.assertEqual(traces[1]['termination'], 'finished')
 
 
 if __name__=='__main__':unittest.main()

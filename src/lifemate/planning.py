@@ -13,6 +13,7 @@ class Decision:
     plan_update: str | None = None
     protocol_error: str | None = None
     raw_text: str = ''
+    memory_update: str | None = None
 
     def payload(self):
         return asdict(self)

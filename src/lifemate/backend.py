@@ -75,6 +75,9 @@ class LocalBackend:
         if self.prompt_controls.variant == 'planning':
             from .planning import parse_planning_response
             return parse_planning_response(text)
+        if self.prompt_controls.variant in ('memory_full', 'memory_compact'):
+            from .memory import parse_memory_response
+            return parse_memory_response(text)
         return parse_calls(text)
 
     def _generate(self, messages, tools, remaining_seconds, max_tokens=384, controls=True, phase='llm'):

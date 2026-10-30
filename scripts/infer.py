@@ -33,12 +33,12 @@ def main():
     parser.add_argument('--train-transcripts', action='store_true', help='Development only: use train reference transcripts instead of ASR')
     parser.add_argument('--budget-seconds',type=float,default=27,
                         help='Per-sample development budget; competition deployment still requires under 30 seconds')
-    parser.add_argument('--prompt-variant', choices=['clean', 'planning'],
+    parser.add_argument('--prompt-variant', choices=['clean', 'planning', 'memory_full', 'memory_compact'],
                         default=os.environ.get('LIFEMATE_PROMPT_VARIANT', 'clean'))
     parser.add_argument('--max-turns', type=int, default=8, help='Bounded number of model decisions')
     args = parser.parse_args()
-    if args.prompt_variant not in ('clean', 'planning'):
-        parser.error('Legacy prompt variants were removed; use clean/planning or a historical commit')
+    if args.prompt_variant not in ('clean', 'planning', 'memory_full', 'memory_compact'):
+        parser.error('Legacy prompt variants were removed; use clean, planning, memory_full or memory_compact')
     os.environ['LIFEMATE_PROMPT_VARIANT'] = args.prompt_variant
     if not math.isfinite(args.budget_seconds) or args.budget_seconds <= 0:
         parser.error('--budget-seconds must be a positive finite number')
@@ -127,7 +127,8 @@ def main():
                 row, log = run_agent(
                     env, backend.decide, messages, tools, deadline,
                     emit=detail.emit if detail else None,
-                    max_turns=args.max_turns, planning=args.prompt_variant == 'planning')
+                    max_turns=args.max_turns, planning=args.prompt_variant == 'planning',
+                    memory_mode=args.prompt_variant if args.prompt_variant.startswith('memory_') else None)
             except Exception as error:
                 # Keep the same environment and every call made before failure.
                 log = {'termination': 'error', 'error_type': type(error).__name__, 'error_message':str(error)}

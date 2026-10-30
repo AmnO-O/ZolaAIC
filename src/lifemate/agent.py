@@ -6,9 +6,15 @@ from .grounding import Evidence
 from .execution import ExecutionLedger
 from .planning import Decision
 
-def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, planning=False):
+def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, planning=False, memory_mode=None):
     """Exactly one supplied environment; never retry writes or replay history automatically."""
     messages = copy.deepcopy(messages)
+    if memory_mode not in (None, 'memory_full', 'memory_compact') or (memory_mode and planning):
+        raise ValueError('Choose clean, planning, memory_full or memory_compact')
+    anchors = copy.deepcopy(messages)
+    current_memory = None
+    memory_revisions = []
+    compact_tail = len(messages)
     tools = list(tools)
     specs = {tool['name']: tool for tool in tools}
     kinds = {name: tool.get('kind') for name, tool in specs.items()}
@@ -29,6 +35,15 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, pl
         if time.monotonic() >= deadline:
             reason = 'deadline'
             break
+        if memory_mode == 'memory_compact' and current_memory is not None:
+            tail = copy.deepcopy(messages[compact_tail:])
+            # The latest assistant's calls must stay paired with their results.
+            for item in tail:
+                if item.get('role') == 'assistant' and 'tool_calls' in item:
+                    item.pop('content', None)
+            messages = (copy.deepcopy(anchors) +
+                        [{'role': 'assistant', 'content': '<memory>' + current_memory + '</memory>'}] + tail)
+            compact_tail = len(anchors) + 1
         if emit:
             emit('decision.input', input={'messages': messages, 'tools': tools},
                  remaining_seconds=max(0, deadline-time.monotonic()))
@@ -53,18 +68,28 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, pl
         protocol_error = decision.protocol_error
         if planning and calls and current_plan is None and not decision.plan_update:
             protocol_error = protocol_error or 'Provide a brief initial <plan> before tool calls'
+        if memory_mode and not decision.memory_update:
+            protocol_error = protocol_error or 'Provide one complete <memory> before native calls or []'
         if protocol_error:
             protocol_errors += 1
             messages.append({'role': 'assistant', 'content': decision.raw_text})
             messages.append({'role': 'user', 'content':
                 'Controller output-format error: ' + protocol_error +
-                '. Use a short <plan> when needed, then native tool calls or literal [].'})
+                ('. Use one <memory>, then native tool calls or literal [].' if memory_mode else
+                 '. Use a short <plan> when needed, then native tool calls or literal [].')})
             if emit:
-                emit('planning.protocol_error', output={'error': protocol_error, 'executed': False})
+                emit('memory.protocol_error' if memory_mode else 'planning.protocol_error', output={'error': protocol_error, 'executed': False})
             if protocol_errors >= 2:
                 reason = 'protocol_error'
                 break
             continue
+        if memory_mode and decision.memory_update:
+            current_memory = decision.memory_update
+            memory_revisions.append({'decision': decisions, 'memory': current_memory})
+            # Keep only the next call/result batch (and any subsequent repair feedback).
+            compact_tail = len(messages)
+            if emit:
+                emit('memory.updated', output=memory_revisions[-1])
         if planning and decision.plan_update:
             current_plan = decision.plan_update
             plan_revisions.append({'decision': decisions, 'remaining_plan': current_plan})
@@ -84,6 +109,8 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, pl
         assistant = {'role': 'assistant', 'tool_calls': executed_batch}
         if planning and decision.plan_update:
             assistant['content'] = '<plan>' + current_plan + '</plan>'
+        if memory_mode:
+            assistant['content'] = '<memory>' + current_memory + '</memory>'
         messages.append(assistant)
         batch_trace = []
         last_batch_rejected = False
@@ -140,7 +167,14 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, pl
                 # Do not continue the batch after a clarification, even if its
                 # result is unusual. It is still an actual logged meta call.
                 clarification |= name == 'sys.ask_missing_info'
-            messages.append({'role':'tool','name':name,'content':result})
+            prompt_result = result
+            if memory_mode:
+                prompt_result = {
+                    'source_id': 'observation_' + str(len(trace) + 1),
+                    'source_type': 'controller_feedback' if not check['ok'] else 'environment_result',
+                    'result': result,
+                }
+            messages.append({'role':'tool','name':name,'content':prompt_result})
             entry = {'call': call, 'result': result}
             trace.append(entry)
             batch_trace.append(entry)
@@ -159,6 +193,8 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, pl
             break
     return {'tool_calls':env.get_tool_calls(),'state_hash':env.get_state_hash()}, {
         'termination':reason,'trace':trace,
+        'memory_mode': memory_mode, 'current_memory': current_memory,
+        'memory_revisions': memory_revisions,
         'decisions': decisions, 'planning': planning, 'current_plan': current_plan,
         'plan_revisions': plan_revisions, 'protocol_errors': protocol_errors,
         'validation_rejections': validation_rejections, 'execution_ledger': ledger.records,
