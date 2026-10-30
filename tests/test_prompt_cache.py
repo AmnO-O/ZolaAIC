@@ -79,7 +79,7 @@ class PromptCacheTests(unittest.TestCase):
 
     def test_hybrid_generation_uses_fresh_recurrent_state(self):
         import torch
-        from transformers import Qwen3_5TextConfig, Qwen3_5ForCausalLM
+        from transformers import Qwen3_5TextConfig, Qwen3_5VisionConfig, Qwen3_5Config, Qwen3_5ForConditionalGeneration
         from lifemate.backend import LocalBackend
         torch.manual_seed(42)
         config = Qwen3_5TextConfig(vocab_size=64, hidden_size=32, intermediate_size=64,
@@ -90,7 +90,13 @@ class PromptCacheTests(unittest.TestCase):
             rope_parameters={'rope_type':'default','rope_theta':10000,'partial_rotary_factor':0.5,'mrope_section':[1,1,2]},
             eos_token_id=None, pad_token_id=0)
         config._attn_implementation='eager'
-        model=Qwen3_5ForCausalLM(config).eval()
+        vision=Qwen3_5VisionConfig(depth=1,hidden_size=32,intermediate_size=64,num_heads=2,
+            num_position_embeddings=16,patch_size=2,spatial_merge_size=2,temporal_patch_size=2,
+            out_hidden_size=32,deepstack_visual_indexes=[])
+        full=Qwen3_5Config(text_config=config.to_dict(),vision_config=vision.to_dict(),
+            image_token_id=60,video_token_id=61,vision_start_token_id=62,vision_end_token_id=63)
+        full._attn_implementation='eager'
+        model=Qwen3_5ForConditionalGeneration(full).eval()
         class Tokenizer:
             eos_token_id=0
             def apply_chat_template(self,*args,**kwargs):
@@ -102,8 +108,10 @@ class PromptCacheTests(unittest.TestCase):
         backend.model,backend.tokenizer=model,Tokenizer()
         backend.device,backend.torch,backend.is_hybrid='cpu',torch,True
         backend.stats=[]
-        first=backend._generate([],[],30,max_tokens=2,controls=False)
-        second=backend._generate([],[],30,max_tokens=2,controls=False)
+        from unittest.mock import patch
+        with patch.dict('os.environ', {'LIFEMATE_PREFILL_CHUNK':'2'}):
+            first=backend._generate([],[],30,max_tokens=2,controls=False)
+            second=backend._generate([],[],30,max_tokens=2,controls=False)
         self.assertEqual(first,second)
         ids=torch.tensor([[1,5,8,9]])
         with torch.inference_mode():

@@ -176,6 +176,10 @@ class LocalBackend:
         from transformers import StoppingCriteriaList
         started = time.monotonic()
         cache = None
+        # This task is text-only. The conditional-generation wrapper keeps
+        # rope_deltas after generate(); clear it before a fresh prompt.
+        if hasattr(self.model.model, 'rope_deltas'):
+            self.model.model.rope_deltas = None
         chunk_size = int(os.environ.get('LIFEMATE_PREFILL_CHUNK', '256'))
         if chunk_size <= 0:
             raise ValueError('Prefill chunk size must be positive')
@@ -189,7 +193,10 @@ class LocalBackend:
                 if time.monotonic() >= end:
                     raise TimeoutError('Prompt processing deadline reached')
                 stop = min(offset+chunk_size, tokens-1)
+                positions = self.torch.arange(offset, stop, device=self.device).view(1, 1, -1)
+                positions = positions.expand(3, encoded['input_ids'].shape[0], -1)
                 result = self.model(input_ids=encoded['input_ids'][:, offset:stop],
+                    position_ids=positions,
                     attention_mask=encoded['attention_mask'][:, :stop],
                     past_key_values=cache, use_cache=True, logits_to_keep=1)
                 if not self.torch.isfinite(result.logits[:, -1, :]).all():
