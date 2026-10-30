@@ -172,38 +172,48 @@ class LocalBackend:
         return text
 
     def _generate_hybrid(self, encoded, tokens, budget, end, emit, phase, deadline_class):
-        """Fresh hybrid state per decision; native cache remains enabled within decoding."""
+        """Fresh recurrent state per decision, memory-bounded chunked prefill."""
         from transformers import StoppingCriteriaList
         started = time.monotonic()
-        first = []
-        def prefill_finished(module, inputs, outputs):
-            if not first:
-                if str(self.device).startswith('cuda'):
-                    self.torch.cuda.synchronize(self.device)
-                if not self.torch.isfinite(outputs.logits[:, -1, :]).all():
-                    raise FloatingPointError('Non-finite Qwen3.5 prefill logits; inspect dtype/runtime')
-                first.append(time.monotonic()-started)
+        cache = None
+        chunk_size = int(os.environ.get('LIFEMATE_PREFILL_CHUNK', '256'))
+        if chunk_size <= 0:
+            raise ValueError('Prefill chunk size must be positive')
         if emit:
             emit(phase + '.cache', input_tokens=tokens, cached_tokens=0,
-                 prefill_tokens=tokens, fresh_tokens=tokens, enabled=False,
-                 reason='Hybrid recurrent cache is fresh for each decision')
-        handle = self.model.register_forward_hook(prefill_finished)
-        try:
-            with self.torch.inference_mode():
-                generated = self.model.generate(**encoded, max_new_tokens=budget, do_sample=False,
-                    use_cache=True, logits_to_keep=1, return_dict_in_generate=True,
-                    stopping_criteria=StoppingCriteriaList([deadline_class()]),
-                    pad_token_id=self.tokenizer.eos_token_id)
-        finally:
-            handle.remove()
+                 prefill_tokens=tokens-1, fresh_tokens=tokens, enabled=False,
+                 prefill_chunk=chunk_size,
+                 reason='Fresh hybrid state per decision; no recurrent cache cropping')
+        with self.torch.inference_mode():
+            for offset in range(0, max(0, tokens-1), chunk_size):
+                if time.monotonic() >= end:
+                    raise TimeoutError('Prompt processing deadline reached')
+                stop = min(offset+chunk_size, tokens-1)
+                result = self.model(input_ids=encoded['input_ids'][:, offset:stop],
+                    attention_mask=encoded['attention_mask'][:, :stop],
+                    past_key_values=cache, use_cache=True, logits_to_keep=1)
+                if not self.torch.isfinite(result.logits[:, -1, :]).all():
+                    raise FloatingPointError('Non-finite Qwen3.5 logits; inspect dtype/runtime')
+                cache = result.past_key_values
+                del result
+            if str(self.device).startswith('cuda'):
+                self.torch.cuda.synchronize(self.device)
+            if time.monotonic() >= end:
+                raise TimeoutError('Prompt processing deadline reached')
+            prefill = time.monotonic()-started
+            generation_started = time.monotonic()
+            generated = self.model.generate(**encoded, max_new_tokens=budget, do_sample=False,
+                past_key_values=cache, use_cache=True, logits_to_keep=1,
+                return_dict_in_generate=True,
+                stopping_criteria=StoppingCriteriaList([deadline_class()]),
+                pad_token_id=self.tokenizer.eos_token_id)
         if str(self.device).startswith('cuda'):
             self.torch.cuda.synchronize(self.device)
-        total = time.monotonic()-started
-        prefill = first[0] if first else total
+        generation = time.monotonic()-generation_started
         output = generated.sequences[0, tokens:]
         text = self.tokenizer.decode(output, skip_special_tokens=True)
         stats = {'input_tokens': tokens, 'output_tokens': len(output), 'cached_tokens': 0,
-                 'prefill_seconds': prefill, 'generation_seconds': max(0, total-prefill)}
+                 'prefill_seconds': prefill, 'generation_seconds': generation}
         self.stats.append(stats)
         if emit:
             emit(phase + '.output', output=text, **{k:v for k,v in stats.items() if k!='input_tokens'})
