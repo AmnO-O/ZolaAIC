@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from lifemate.agent import Decision, parse_decision, run_agent
 from lifemate.backend import LocalBackend
 from lifemate.prompts import apply_policy
+from lifemate.output_protocol import valid_output_prefix
 
 
 def decision(calls):
@@ -17,6 +18,65 @@ def decision(calls):
 
 
 class AgentTests(unittest.TestCase):
+    def test_streaming_envelope_accepts_split_tags_and_multiple_calls(self):
+        text = ' \n<tool_call><function=x.read></function></tool_call>\n<tool_call><function=y.read></function></tool_call> '
+        for end in range(len(text)+1):
+            self.assertTrue(valid_output_prefix(text[:end]), text[:end])
+        for text in ('', '[', '[]', '[]\n'):
+            self.assertTrue(valid_output_prefix(text))
+        for text in ('I will check', '<think>', '<tool>', '[] trailing',
+                     '[]<tool_call>', '<tool_call></tool_call> trailing'):
+            self.assertFalse(valid_output_prefix(text), text)
+
+    def test_backend_interrupts_prose_without_executing_a_partial_batch(self):
+        import torch
+        from types import SimpleNamespace
+        class Tokenizer:
+            eos_token_id = 0
+            def apply_chat_template(self, *args, **kwargs):
+                return {'input_ids':torch.tensor([[1,2]]), 'attention_mask':torch.ones((1,2),dtype=torch.long)}
+            def decode(self, tokens, skip_special_tokens=True):
+                return ''.join(chr(int(t)-10) if int(t)>2 else ('<eos>' if not skip_special_tokens else '') for t in tokens)
+        class Model:
+            generation_config = SimpleNamespace(eos_token_id=0)
+            model = SimpleNamespace(rope_deltas=None)
+            text = ''
+            def __call__(self, **kwargs):
+                return SimpleNamespace(past_key_values=None, logits=torch.zeros(1,1,8))
+            def generate(self, input_ids, stopping_criteria, **kwargs):
+                for token in [ord(c)+10 for c in self.text]+[0]:
+                    input_ids=torch.cat([input_ids,torch.tensor([[token]])],dim=1)
+                    if bool(stopping_criteria(input_ids,None).all()) or token==0:
+                        break
+                return SimpleNamespace(sequences=input_ids,past_key_values=None)
+        tool = '<tool_call><function=x.read></function></tool_call>'
+        for hybrid in (False, True):
+            backend=LocalBackend.__new__(LocalBackend)
+            backend.model,backend.tokenizer=Model(),Tokenizer()
+            backend.torch,backend.device,backend.is_hybrid=torch,'cpu',hybrid
+            backend.reuse_prompt_cache=False
+            backend.protocol='xml'  # Exercise the same wire content through both generation paths.
+            backend.stats=[]
+            backend.model.text='I will check and claim success'
+            result=backend.decide([],[],30)
+            self.assertIsNotNone(result.protocol_error)
+            self.assertEqual(backend.stats[-1]['output_tokens'],1)
+            backend.model.text=tool+'\n'+tool
+            result=backend.decide([],[],30)
+            self.assertIsNone(result.protocol_error)
+            self.assertEqual(len(result.tool_calls),2)
+            backend.model.text=tool+' trailing prose'
+            result=backend.decide([],[],30)
+            self.assertIsNotNone(result.protocol_error)
+            self.assertEqual(result.tool_calls,[])
+            backend.model.text='[]'
+            result=backend.decide([],[],30)
+            self.assertIsNone(result.protocol_error)
+            self.assertEqual(result.tool_calls,[])
+            self.assertTrue(backend._generation_complete)
+            backend.model.text=''
+            self.assertIsNotNone(backend.decide([],[],30).protocol_error)
+
     def test_qwen3_native_json_protocol(self):
         text = '<tool_call>{"name":"alarm.create","arguments":{"hour":6}}</tool_call>'
         parsed = parse_decision(text, protocol='json')
@@ -26,8 +86,8 @@ class AgentTests(unittest.TestCase):
                           text.replace('"hour":6', '"hour":6,"hour":7'),
                           text.replace('</tool_call>', '')):
             self.assertIsNotNone(parse_decision(malformed, protocol='json').protocol_error)
-        self.assertIsNone(parse_decision('Done.', protocol='json', allow_final_text=True).protocol_error)
         self.assertIsNotNone(parse_decision('Done.', protocol='json').protocol_error)
+        self.assertEqual(len(parse_decision(text+'\n'+text, protocol='json').tool_calls),2)
 
     def test_only_explicit_complete_outputs_control_execution(self):
         self.assertEqual(parse_decision('[]').tool_calls, [])
@@ -47,13 +107,14 @@ class AgentTests(unittest.TestCase):
             'amount':{'type':'integer'},'enabled':{'type':'boolean'},
             'items':{'type':'array'},'note':{'type':'string'}}}}]
         text = '<tool_call><function=service.act><parameter=amount>500000</parameter><parameter=enabled>True</parameter><parameter=items>[1,2]</parameter><parameter=note>  hello  </parameter></function></tool_call>'
+        self.assertEqual(len(parse_decision(text+'\n'+text, tools).tool_calls), 2)
         result = parse_decision(text, tools)
         self.assertIsNone(result.protocol_error)
-        self.assertIsNone(parse_decision('Short introduction.\n'+text, tools).protocol_error)
-        self.assertIsNone(parse_decision('Finished.', tools, allow_final_text=True).protocol_error)
+        self.assertIsNotNone(parse_decision('Short introduction.\n'+text, tools).protocol_error)
         self.assertIsNotNone(parse_decision('Finished.', tools).protocol_error)
-        self.assertIsNotNone(parse_decision(text+'suffix', tools, allow_final_text=True).protocol_error)
-        self.assertIsNotNone(parse_decision('<tool_call>unfinished', tools, allow_final_text=True).protocol_error)
+        self.assertIsNotNone(parse_decision('<think></think>[]', tools).protocol_error)
+        self.assertIsNotNone(parse_decision(text+'suffix', tools).protocol_error)
+        self.assertIsNotNone(parse_decision('<tool_call>unfinished', tools).protocol_error)
         self.assertEqual(result.tool_calls[0]['arguments'],
                          {'amount':500000,'enabled':True,'items':[1,2],'note':'  hello  '})
         self.assertIsNotNone(parse_decision(text.replace('500000','NaN'), tools).protocol_error)

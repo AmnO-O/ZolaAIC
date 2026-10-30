@@ -10,6 +10,7 @@ import time
 from .messages import chat_messages, native_tools
 from .prompts import INSTRUCTION, apply_policy
 from .agent import Decision, parse_decision
+from .output_protocol import NativeOutputGuard
 
 
 class LocalBackend:
@@ -86,6 +87,7 @@ class LocalBackend:
         self.runtime_info['total_parameters'] = self.llm_parameters + self.asr_parameters
         self.runtime_info['max_new_tokens'] = self.max_new_tokens
         self.runtime_info['thinking'] = False
+        self.runtime_info['strict_tool_output'] = True
         self.runtime_info['cross_turn_cache'] = self.reuse_prompt_cache
         self.runtime_info['adapter_path'] = adapter_path
         self.runtime_info['policy'] = 'single'
@@ -99,10 +101,12 @@ class LocalBackend:
 
     def decide(self, messages, tools, remaining_seconds):
         text = self._generate(messages, tools, remaining_seconds)
+        error = getattr(getattr(self, '_output_guard', None), 'error', None)
+        if error:
+            return Decision(protocol_error=error, raw_text=text)
         if not getattr(self, '_generation_complete', True):
             return Decision(protocol_error='Token limit reached before assistant turn ended', raw_text=text)
-        return parse_decision(text, tools, allow_final_text=getattr(self, '_generation_complete', False),
-                              protocol=getattr(self, 'protocol', 'xml'))
+        return parse_decision(text, tools, protocol=getattr(self, 'protocol', 'xml'))
 
     def _generate(self, messages, tools, remaining_seconds, max_tokens=None, controls=True, phase='llm'):
         if remaining_seconds <= 0:
@@ -132,8 +136,10 @@ class LocalBackend:
                  'rendered_prompt': self.tokenizer.decode(encoded['input_ids'][0], skip_special_tokens=False)},
                  input_tokens=tokens, max_new_tokens=budget)
         encoded = {k: v.to(self.device) for k, v in encoded.items()}
+        self._output_guard = NativeOutputGuard(self.tokenizer, tokens, self._assistant_stop_ids()) if controls else None
+        stoppers = StoppingCriteriaList([Deadline()] + ([self._output_guard] if controls else []))
         if getattr(self, 'is_hybrid', False):
-            return self._generate_hybrid(encoded, tokens, budget, end, emit, phase, Deadline)
+            return self._generate_hybrid(encoded, tokens, budget, end, emit, phase, stoppers)
         cache, reused = self.prompt_cache.take(token_ids) if self.reuse_prompt_cache else (None, 0)
         if emit:
             emit(phase + '.cache', input_tokens=tokens, cached_tokens=reused,
@@ -163,7 +169,7 @@ class LocalBackend:
                 past_key_values=cache,
                 eos_token_id=self._assistant_stop_ids(),
                 return_dict_in_generate=True,
-                stopping_criteria=StoppingCriteriaList([Deadline()]),
+                stopping_criteria=stoppers,
                 pad_token_id=self.tokenizer.eos_token_id)
         sequences = generated.sequences
         if str(self.device).startswith('cuda'):
@@ -172,12 +178,14 @@ class LocalBackend:
         self._generation_complete = (sequences.shape[-1] > tokens and
                                      int(sequences[0, -1]) in self._assistant_stop_ids())
         text = self.tokenizer.decode(sequences[0, tokens:], skip_special_tokens=True)
+        guard_error = getattr(self._output_guard, 'error', None)
         if emit:
             emit(phase + '.output', output=text, output_tokens=sequences.shape[-1]-tokens,
-                 cached_tokens=reused, prefill_seconds=prefill_seconds, generation_seconds=generation_seconds)
+                 cached_tokens=reused, prefill_seconds=prefill_seconds, generation_seconds=generation_seconds,
+                 output_guard_error=guard_error, assistant_turn_complete=self._generation_complete)
         self.stats.append({'input_tokens': tokens, 'output_tokens': sequences.shape[-1]-tokens,
                           'cached_tokens': reused, 'prefill_seconds': prefill_seconds,
-                          'generation_seconds': generation_seconds})
+                          'generation_seconds': generation_seconds, 'output_guard_error': guard_error})
         if time.monotonic() >= end:
             raise TimeoutError('Model generation deadline reached')
         if self.reuse_prompt_cache:
@@ -190,9 +198,8 @@ class LocalBackend:
         values.extend(configured if isinstance(configured, list) else [configured])
         return sorted({value for value in values if isinstance(value, int)})
 
-    def _generate_hybrid(self, encoded, tokens, budget, end, emit, phase, deadline_class):
+    def _generate_hybrid(self, encoded, tokens, budget, end, emit, phase, stoppers):
         """Fresh recurrent state per decision, memory-bounded chunked prefill."""
-        from transformers import StoppingCriteriaList
         started = time.monotonic()
         cache = None
         stop_ids = self._assistant_stop_ids()
@@ -233,7 +240,7 @@ class LocalBackend:
                 past_key_values=cache, use_cache=True, logits_to_keep=1,
                 eos_token_id=stop_ids,
                 return_dict_in_generate=True,
-                stopping_criteria=StoppingCriteriaList([deadline_class()]),
+                stopping_criteria=stoppers,
                 pad_token_id=self.tokenizer.eos_token_id)
         if str(self.device).startswith('cuda'):
             self.torch.cuda.synchronize(self.device)
@@ -244,6 +251,7 @@ class LocalBackend:
         stats = {'input_tokens': tokens, 'output_tokens': len(output), 'cached_tokens': 0,
                  'prefill_seconds': prefill, 'generation_seconds': generation,
                  'assistant_turn_complete': self._generation_complete,
+                 'output_guard_error': getattr(self._output_guard, 'error', None),
                  'eos_token_id': self.tokenizer.eos_token_id, 'stop_token_ids': stop_ids}
         self.stats.append(stats)
         if emit:

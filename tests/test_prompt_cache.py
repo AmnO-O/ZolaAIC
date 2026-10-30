@@ -76,6 +76,23 @@ class PromptCacheTests(unittest.TestCase):
                     max_new_tokens=3, do_sample=False, pad_token_id=0)
                 self.assertEqual(reused_output,backend.tokenizer.decode(fresh_output[0,len(ids):]))
         self.assertEqual(hits, [0, 4, 3, 1])
+        self.assert_real_model_guard(model, backend.tokenizer, torch)
+
+    def assert_real_model_guard(self, model, tokenizer, torch):
+        from transformers import StoppingCriteriaList, LogitsProcessorList
+        from lifemate.output_protocol import NativeOutputGuard
+        ids=torch.tensor([[1,5,8,9]])
+        guard=NativeOutputGuard(tokenizer,4,[0])
+        def force_non_tool(ids,scores):
+            scores.fill_(-float('inf'));scores[:,6]=0
+            return scores
+        with torch.inference_mode():
+            result=model.generate(input_ids=ids,attention_mask=torch.ones_like(ids),
+                max_new_tokens=3,do_sample=False,pad_token_id=0,eos_token_id=0,
+                logits_processor=LogitsProcessorList([force_non_tool]),
+                stopping_criteria=StoppingCriteriaList([guard]))
+        self.assertEqual(result.shape[-1],5)
+        self.assertIsNotNone(guard.error)
 
     def test_hybrid_generation_uses_fresh_recurrent_state(self):
         import torch
@@ -118,6 +135,7 @@ class PromptCacheTests(unittest.TestCase):
             fresh=model.generate(input_ids=ids,attention_mask=torch.ones_like(ids),
                                  max_new_tokens=2,do_sample=False,pad_token_id=0,eos_token_id=0)
         self.assertEqual(first,backend.tokenizer.decode(fresh[0,4:]))
+        self.assert_real_model_guard(model, backend.tokenizer, torch)
         self.assertFalse(backend.tokenizer.thinking)
         self.assertEqual([s['cached_tokens'] for s in backend.stats],[0,0])
 

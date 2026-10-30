@@ -58,3 +58,5 @@ Seeds and greedy decoding are fixed. The model remains below the parameter limit
 Current F1 is diagnostic, not verified official scoring. See [architecture](docs/architecture.md) and [training protocol](docs/training.md).
 
 The generation ceiling is configurable with `LIFEMATE_MAX_NEW_TOKENS` (default 1024), or `MAX_NEW_TOKENS` in the notebooks. It applies per decision, stops early at native EOS, and remains subject to the sample deadline and 16K total context cap. The public notebook explicitly retains a 384-token ceiling pending latency validation.
+
+Inference accepts only consecutive native tool-call blocks or literal `[]`. A generation-time prefix guard stops text outside that envelope; the complete response is then parsed strictly before any calls execute. Plain text is never a successful stop, even at EOS. One protocol repair is allowed within the existing deadline/turn budget. The guard is not grammar-constrained decoding and does not verify task completion or tool-argument semantics.
