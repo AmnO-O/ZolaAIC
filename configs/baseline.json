@@ -5,7 +5,7 @@
     "license": "Apache-2.0",
     "commit_date": "2026-03-02",
     "max_context_tokens": 16384,
-    "max_new_tokens": 384,
+    "max_new_tokens": 1024,
     "enable_thinking": false,
     "architecture": "qwen3_5",
     "checkpoint_parameters": 4659865088,

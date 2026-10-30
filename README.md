@@ -54,3 +54,5 @@ Seeds and greedy decoding are fixed. The model remains below the parameter limit
 `finished` is a model stop, not task-success verification. Branches, entity selection and semantic completeness remain model responsibilities. Evidence IDs are currently app-scoped, not a full typed provenance graph. Identical-write protection can also block intentionally repeated identical actions. Failed or uncertain writes are not claimed complete.
 
 Current F1 is diagnostic, not verified official scoring. See [architecture](docs/architecture.md) and [training protocol](docs/training.md).
+
+The generation ceiling is configurable with `LIFEMATE_MAX_NEW_TOKENS` (default 1024), or `MAX_NEW_TOKENS` in the notebooks. It applies per decision, stops early at native EOS, and remains subject to the sample deadline and 16K total context cap. The public notebook explicitly retains a 384-token ceiling pending latency validation.

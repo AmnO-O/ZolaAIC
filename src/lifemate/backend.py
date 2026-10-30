@@ -32,6 +32,9 @@ class LocalBackend:
             torch.use_deterministic_algorithms(True)
         torch.backends.cudnn.benchmark = False
         torch.backends.cuda.matmul.allow_tf32 = False
+        self.max_new_tokens = int(os.environ.get('LIFEMATE_MAX_NEW_TOKENS', '1024'))
+        if not 1 <= self.max_new_tokens <= 16384:
+            raise ValueError('LIFEMATE_MAX_NEW_TOKENS must be between 1 and 16384')
         self.torch, self.device = torch, device
         self.tokenizer = AutoTokenizer.from_pretrained(llm_path, local_files_only=True)
         config = AutoConfig.from_pretrained(llm_path, local_files_only=True)
@@ -81,6 +84,7 @@ class LocalBackend:
         self.runtime_info['model_type'] = config.model_type
         self.runtime_info['llm_parameters'] = self.llm_parameters
         self.runtime_info['total_parameters'] = self.llm_parameters + self.asr_parameters
+        self.runtime_info['max_new_tokens'] = self.max_new_tokens
         self.runtime_info['thinking'] = False
         self.runtime_info['cross_turn_cache'] = self.reuse_prompt_cache
         self.runtime_info['adapter_path'] = adapter_path
@@ -100,7 +104,7 @@ class LocalBackend:
         return parse_decision(text, tools, allow_final_text=getattr(self, '_generation_complete', False),
                               protocol=getattr(self, 'protocol', 'xml'))
 
-    def _generate(self, messages, tools, remaining_seconds, max_tokens=384, controls=True, phase='llm'):
+    def _generate(self, messages, tools, remaining_seconds, max_tokens=None, controls=True, phase='llm'):
         if remaining_seconds <= 0:
             raise TimeoutError('No generation budget')
         from transformers import StoppingCriteria, StoppingCriteriaList
@@ -117,6 +121,8 @@ class LocalBackend:
             tokenize=True, return_tensors='pt', return_dict=True, enable_thinking=False)
         tokens = encoded['input_ids'].shape[-1]
         token_ids = encoded['input_ids'][0].tolist()
+        if max_tokens is None:
+            max_tokens = getattr(self, 'max_new_tokens', 1024)
         budget = min(max_tokens, 16384-tokens)
         if budget <= 0:
             raise ValueError('Context exceeds 16K; refusing silent truncation')
