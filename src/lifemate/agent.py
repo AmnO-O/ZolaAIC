@@ -51,8 +51,10 @@ def _parameter_value(text, schema):
     return value
 
 
-def parse_decision(text, tools=(), allow_final_text=False):
-    """Qwen3.5 native XML only. Truncated output is never a successful stop."""
+def parse_decision(text, tools=(), allow_final_text=False, protocol="xml"):
+    """Parse the selected native wire format; never accept truncated calls."""
+    if protocol not in ("xml", "json"):
+        raise ValueError("Unknown native protocol")
     try:
         body = re.sub(r'^\s*<think>\s*</think>\s*', '', text, count=1).strip()
         if body == '[]':
@@ -69,7 +71,27 @@ def parse_decision(text, tools=(), allow_final_text=False):
                 or body.count('</tool_call>') != len(blocks)
                 or any(marker in prefix for marker in ('<function', '<parameter', '<think', '</think', '<|im_'))
                 or re.sub(r'<tool_call>.*?</tool_call>', '', tail, flags=re.S).strip()):
-            raise ValueError('Use complete native XML calls with no suffix, or finish the assistant turn')
+            raise ValueError('Use complete native tool calls with no suffix, or finish the assistant turn')
+        if protocol == 'json':
+            def pairs(items):
+                result = {}
+                for key, value in items:
+                    if key in result:
+                        raise ValueError('Duplicate JSON key')
+                    result[key] = value
+                return result
+            def invalid(value):
+                raise ValueError('Non-finite JSON value')
+            calls = []
+            for block in blocks:
+                call = json.loads(block, object_pairs_hook=pairs, parse_constant=invalid)
+                if (not isinstance(call, dict) or set(call) != {'name', 'arguments'}
+                        or not isinstance(call['name'], str) or not call['name']
+                        or not isinstance(call['arguments'], dict)):
+                    raise ValueError('Expected native name/arguments JSON object')
+                json.dumps(call, allow_nan=False)
+                calls.append(call)
+            return Decision(calls, raw_text=text)
         specs = {t['name']: t for t in tools}
         calls = []
         for block in blocks:

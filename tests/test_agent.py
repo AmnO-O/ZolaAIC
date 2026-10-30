@@ -17,6 +17,18 @@ def decision(calls):
 
 
 class AgentTests(unittest.TestCase):
+    def test_qwen3_native_json_protocol(self):
+        text = '<tool_call>{"name":"alarm.create","arguments":{"hour":6}}</tool_call>'
+        parsed = parse_decision(text, protocol='json')
+        self.assertIsNone(parsed.protocol_error)
+        self.assertEqual(parsed.tool_calls[0]['arguments'], {'hour': 6})
+        for malformed in (text+'suffix', text.replace('6}', 'NaN}'),
+                          text.replace('"hour":6', '"hour":6,"hour":7'),
+                          text.replace('</tool_call>', '')):
+            self.assertIsNotNone(parse_decision(malformed, protocol='json').protocol_error)
+        self.assertIsNone(parse_decision('Done.', protocol='json', allow_final_text=True).protocol_error)
+        self.assertIsNotNone(parse_decision('Done.', protocol='json').protocol_error)
+
     def test_only_explicit_complete_outputs_control_execution(self):
         self.assertEqual(parse_decision('[]').tool_calls, [])
         self.assertIsNone(decision([call('x.read')]).protocol_error)

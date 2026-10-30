@@ -35,10 +35,11 @@ class LocalBackend:
         self.torch, self.device = torch, device
         self.tokenizer = AutoTokenizer.from_pretrained(llm_path, local_files_only=True)
         config = AutoConfig.from_pretrained(llm_path, local_files_only=True)
-        if config.model_type != 'qwen3_5':
-            raise ValueError('This trial requires the pinned Qwen3.5 checkpoint, not old Qwen3 assets')
-        self.is_hybrid = True
-        loader = Qwen3_5ForConditionalGeneration
+        if config.model_type not in ('qwen3', 'qwen3_5'):
+            raise ValueError('Supported checkpoints: Qwen3 and Qwen3.5')
+        self.is_hybrid = config.model_type == 'qwen3_5'
+        self.protocol = 'xml' if self.is_hybrid else 'json'
+        loader = Qwen3_5ForConditionalGeneration if self.is_hybrid else AutoModelForCausalLM
         dtype = torch.bfloat16 if self.is_hybrid and str(device).startswith('cuda') and torch.cuda.is_bf16_supported(including_emulation=False) else torch.float16
         self.model = loader.from_pretrained(
             llm_path, local_files_only=True, torch_dtype=dtype,
@@ -96,7 +97,8 @@ class LocalBackend:
         text = self._generate(messages, tools, remaining_seconds)
         if not getattr(self, '_generation_complete', True):
             return Decision(protocol_error='Token limit reached before assistant turn ended', raw_text=text)
-        return parse_decision(text, tools, allow_final_text=getattr(self, '_generation_complete', False))
+        return parse_decision(text, tools, allow_final_text=getattr(self, '_generation_complete', False),
+                              protocol=getattr(self, 'protocol', 'xml'))
 
     def _generate(self, messages, tools, remaining_seconds, max_tokens=384, controls=True, phase='llm'):
         if remaining_seconds <= 0:
@@ -153,6 +155,7 @@ class LocalBackend:
             generated = self.model.generate(
                 **encoded, max_new_tokens=budget, do_sample=False,
                 past_key_values=cache,
+                eos_token_id=self._assistant_stop_ids(),
                 return_dict_in_generate=True,
                 stopping_criteria=StoppingCriteriaList([Deadline()]),
                 pad_token_id=self.tokenizer.eos_token_id)
@@ -160,6 +163,8 @@ class LocalBackend:
         if str(self.device).startswith('cuda'):
             self.torch.cuda.synchronize(self.device)
         generation_seconds = time.monotonic() - generation_started
+        self._generation_complete = (sequences.shape[-1] > tokens and
+                                     int(sequences[0, -1]) in self._assistant_stop_ids())
         text = self.tokenizer.decode(sequences[0, tokens:], skip_special_tokens=True)
         if emit:
             emit(phase + '.output', output=text, output_tokens=sequences.shape[-1]-tokens,

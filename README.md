@@ -15,6 +15,8 @@ The current trial uses the official Qwen3.5-4B post-trained checkpoint without L
 - `scripts/prepare_sft.py`, `scripts/train_adapter.py`: private training data and QLoRA adapter training.
 - `scripts/infer.py`, `scripts/evaluate.py`, `scripts/evaluate_run.py`, `scripts/validate_submission.py`: inference, diagnostic evaluation and format/coverage checks.
 
+For a paired model control, `configs/qwen3_control.json` pins Qwen3-4B-Instruct-2507. Both models share the same policy and execution loop; the backend selects the checkpoint-native XML or JSON wire format. Compare with identical IDs, budgets, precision and cache settings.
+
 ## Kaggle
 
 First run [the three-sample trial](notebooks/kaggle_pipeline.ipynb) with reference transcripts, then real audio. Fresh model files download to models/qwen3.5-4b; do not reuse the old models/llm directory. Cross-turn cache is disabled for hybrid recurrent state, but generation still uses its native cache within each decision. The runtime uses BF16 where supported, otherwise FP16 (T4). GPU quality and runtime must be measured before training.
