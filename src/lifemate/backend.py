@@ -39,7 +39,7 @@ class LocalBackend:
             raise ValueError('This trial requires the pinned Qwen3.5 checkpoint, not old Qwen3 assets')
         self.is_hybrid = True
         loader = Qwen3_5ForConditionalGeneration
-        dtype = torch.bfloat16 if self.is_hybrid and str(device).startswith('cuda') and torch.cuda.is_bf16_supported() else torch.float16
+        dtype = torch.bfloat16 if self.is_hybrid and str(device).startswith('cuda') and torch.cuda.is_bf16_supported(including_emulation=False) else torch.float16
         self.model = loader.from_pretrained(
             llm_path, local_files_only=True, torch_dtype=dtype,
             attn_implementation=os.environ.get('LIFEMATE_ATTN', 'sdpa')).to(device).eval()
