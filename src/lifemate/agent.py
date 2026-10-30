@@ -1,208 +1,187 @@
-"""Bounded observe-act loop: validate evidence without silently changing intent."""
+"""Direct baseline: native actions, immutable evidence, no generated memory."""
 import copy
+import json
+import re
 import time
+from dataclasses import dataclass, field
 
+from .messages import parse_calls
 from .grounding import Evidence
 from .execution import ExecutionLedger
-from .planning import Decision
-from .validation import safe_canonicalize
 
-def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None, planning=False, memory_mode=None):
-    """Exactly one supplied environment; never retry writes or replay history automatically."""
+
+@dataclass
+class Decision:
+    tool_calls: list = field(default_factory=list)
+    protocol_error: str | None = None
+    raw_text: str = ''
+
+    def payload(self):
+        return {'tool_calls': self.tool_calls, 'protocol_error': self.protocol_error,
+                'raw_text': self.raw_text}
+
+
+def parse_decision(text):
+    """Only complete native calls or explicit [] may control execution."""
+    try:
+        calls = parse_calls(text)
+        remainder = re.sub(r'<tool_call>.*?</tool_call>', '', text, flags=re.S).strip()
+        if not calls and remainder == '[]':
+            return Decision(raw_text=text)
+        if not calls or remainder:
+            raise ValueError('Emit only complete native tool calls, or literal [] to stop')
+        # Duplicate keys and non-finite JSON numbers cannot be silently accepted.
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError('Duplicate JSON key: ' + key)
+                result[key] = value
+            return result
+        def invalid_constant(value):
+            raise ValueError('Non-finite JSON value: ' + value)
+        for block in re.findall(r'<tool_call>(.*?)</tool_call>', text, re.S):
+            obj = json.loads(block, object_pairs_hook=pairs, parse_constant=invalid_constant)
+            if set(obj) != {'name', 'arguments'}:
+                raise ValueError('Each call must contain exactly name and arguments')
+            if not isinstance(obj['arguments'], dict):
+                raise ValueError('arguments must be a JSON object')
+        json.dumps(calls, allow_nan=False)
+        return Decision(calls, raw_text=text)
+    except (ValueError, TypeError) as error:
+        return Decision(protocol_error=str(error), raw_text=text)
+
+
+def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None):
+    """One environment. Preserve actual arguments/results and all attempted calls."""
     messages = copy.deepcopy(messages)
-    if memory_mode not in (None, 'memory_full', 'memory_compact') or (memory_mode and planning):
-        raise ValueError('Choose clean, planning, memory_full or memory_compact')
-    anchors = copy.deepcopy(messages)
-    current_memory = None
-    memory_revisions = []
-    compact_tail = len(messages)
     tools = list(tools)
-    specs = {tool['name']: tool for tool in tools}
-    kinds = {name: tool.get('kind') for name, tool in specs.items()}
+    specs = {t['name']: t for t in tools}
     evidence = Evidence(messages)
+    ledger = ExecutionLedger()
     trace = []
     reason = 'turn_limit'
-    read_executed = write_executed = False
-    ledger = ExecutionLedger()
-    current_plan = None
-    plan_revisions = []
-    protocol_errors = 0
-    validation_rejections = 0
-    last_batch_rejected = False
-    decisions = 0
+    decisions = protocol_errors = validation_rejections = 0
     attempted_reads = attempted_writes = 0
+    last_rejected = False
+
+    def event(stage, **data):
+        if emit:
+            emit(stage, **data)
 
     for _ in range(max_turns):
         if time.monotonic() >= deadline:
             reason = 'deadline'
             break
-        if memory_mode == 'memory_compact' and current_memory is not None:
-            tail = copy.deepcopy(messages[compact_tail:])
-            # Retain the latest accepted assistant turn intact: its memory and
-            # calls belong to one generation. Drop only older live batches.
-            # With one batch this is identical to memory_full, including roles.
-            messages = copy.deepcopy(anchors) + tail
-            compact_tail = len(anchors)
-        if emit:
-            emit('decision.input', input={'messages': messages, 'tools': tools},
-                 remaining_seconds=max(0, deadline-time.monotonic()))
-        # Logging can block. Never give the backend a stale remaining budget.
+        event('decision.input', input={'messages': messages, 'tools': tools},
+              remaining_seconds=max(0, deadline-time.monotonic()))
         remaining = deadline-time.monotonic()
         if remaining <= 0:
             reason = 'deadline'
             break
-        response = decide(messages, tools, remaining)
         decisions += 1
-        decision = response if isinstance(response, Decision) else Decision(tool_calls=response)
-        calls = decision.tool_calls
-        if emit:
-            emit('decision.output', output=decision.payload() if isinstance(response, Decision) else calls)
+        try:
+            response = decide(messages, tools, remaining)
+        except TimeoutError:
+            reason = 'deadline'
+            break
+        if isinstance(response, list):  # Backend plugin compatibility.
+            response = Decision(response)
+        if not isinstance(response, Decision):
+            raise ValueError('Direct backend must return Decision or a list of calls')
+        event('decision.output', output=response.payload())
         if time.monotonic() >= deadline:
             reason = 'deadline'
             break
+        calls = response.tool_calls
         if not isinstance(calls, list) or any(
-            not isinstance(call, dict) or not isinstance(call.get('name'), str)
-            or not isinstance(call.get('arguments'), dict) for call in calls):
-            raise ValueError('Backend must return valid native tool calls')
-        protocol_error = decision.protocol_error
-        if planning and calls and current_plan is None and not decision.plan_update:
-            protocol_error = protocol_error or 'Provide a brief initial <plan> before tool calls'
-        if memory_mode and not decision.memory_update:
-            protocol_error = protocol_error or 'Provide one complete <memory> before native calls or []'
-        if protocol_error:
+            not isinstance(c, dict) or not isinstance(c.get('name'), str)
+            or not isinstance(c.get('arguments'), dict) for c in calls):
+            raise ValueError('Malformed backend calls')
+        if response.protocol_error:
             protocol_errors += 1
-            messages.append({'role': 'assistant', 'content': decision.raw_text})
-            messages.append({'role': 'user', 'content':
-                'Controller output-format error: ' + protocol_error +
-                '. The entire preceding response was rejected. NONE of its proposed tool calls '
-                'were executed, and its memory update was not accepted. Do not mark those '
-                'proposed actions completed or use their arguments as observed facts. '
-                'Only actual environment results establish execution outcomes' +
-                ('. Use one <memory>, then native tool calls or literal [].' if memory_mode else
-                 '. Use a short <plan> when needed, then native tool calls or literal [].')})
-            if emit:
-                emit('memory.protocol_error' if memory_mode else 'planning.protocol_error', output={'error': protocol_error, 'executed': False})
+            # Raw rejected output stays in logs, never in executable assistant history.
+            feedback = {'controller_feedback': 'output_rejected', 'executed': False,
+                        'error': response.protocol_error,
+                        'instruction': 'No calls in that response ran. Emit native calls or literal []. Do not claim completion of rejected actions.'}
+            messages.append({'role': 'user', 'content': json.dumps(feedback, ensure_ascii=False)})
+            event('controller.feedback', output=feedback)
             if protocol_errors >= 2:
                 reason = 'protocol_error'
                 break
             continue
-        if memory_mode and decision.memory_update:
-            current_memory = decision.memory_update
-            memory_revisions.append({'decision': decisions, 'memory': current_memory})
-            # Keep only the next call/result batch (and any subsequent repair feedback).
-            compact_tail = len(messages)
-            if emit:
-                emit('memory.updated', output=memory_revisions[-1])
-        if planning and decision.plan_update:
-            current_plan = decision.plan_update
-            plan_revisions.append({'decision': decisions, 'remaining_plan': current_plan})
-            if emit:
-                emit('planning.updated', output=plan_revisions[-1])
         if not calls:
-            if ledger.failed_targets:
-                reason = 'execution_failed'
-            elif last_batch_rejected:
-                reason = 'validation_failed'
-            else:
-                reason = 'finished'
-            if planning and decision.plan_update:
-                messages.append({'role': 'assistant', 'content': '<plan>' + current_plan + '</plan>'})
+            reason = ('execution_failed' if ledger.failed_targets else
+                      'validation_failed' if last_rejected else 'finished')
             break
-        executed_batch = []
-        assistant = {'role': 'assistant', 'tool_calls': executed_batch}
-        if planning and decision.plan_update:
-            assistant['content'] = '<plan>' + current_plan + '</plan>'
-        if memory_mode:
-            assistant['content'] = '<memory>' + current_memory + '</memory>'
+        # Keep each proposal paired with a result, including explicit nonexecution feedback.
+        assistant = {'role': 'assistant', 'tool_calls': []}
         messages.append(assistant)
-        batch_trace = []
-        last_batch_rejected = False
-        clarification = False
+        batch = []
+        last_rejected = False
         for original in calls:
             if time.monotonic() >= deadline:
                 reason = 'deadline'
                 break
             call = copy.deepcopy(original)
             name, args = call['name'], call['arguments']
-            if name in specs and isinstance(args, dict):
-                args = safe_canonicalize(name, args, specs[name])
-                call['arguments'] = args
-            error = None
-            if name not in specs:
-                error = 'Tool is not permitted for this sample.'
-            if not error and ledger.duplicate_write(call, kinds.get(name)):
-                error = 'This identical write already succeeded; do not repeat a completed action.'
+            kind = specs.get(name, {}).get('kind')
+            error = 'Tool is not permitted for this sample.' if name not in specs else None
+            if not error and ledger.duplicate_write(call, kind):
+                error = 'Identical write already succeeded; do not repeat it.'
             if not error:
-                error = evidence.check(specs.get(name,{}),args,specs)
-            check = {'ok':False,'error':error} if error else env.validate(name,args)
-            if emit:
-                emit('tool.validation',input=call,output=check)
+                error = evidence.check(specs[name], args, specs)
+            check = {'ok': False, 'error': error} if error else env.validate(name, args)
+            event('tool.validation', input=call, output=check)
             if time.monotonic() >= deadline:
                 reason = 'deadline'
                 break
-            executed_batch.append(call)
+            executed = False
+            status = 'rejected'
             if not check['ok']:
+                last_rejected = True
                 validation_rejections += 1
-                last_batch_rejected = True
-                result = {'validation_error':check.get('error'),'executed':False}
+                result = {'validation_error': check.get('error'), 'executed': False}
             else:
-                if emit:
-                    emit('tool.input',input=call)
+                event('tool.input', input=call)
                 if time.monotonic() >= deadline:
-                    executed_batch.pop()
                     reason = 'deadline'
                     break
+                executed = True
                 try:
                     result = env.call(name, args)
                 except Exception as error:
-                    # A raised call may already have changed state. Never retry it here.
-                    result = {'execution_error': str(error), 'outcome': 'uncertain',
-                              'execution_attempted': True}
-                kind = kinds.get(name)
+                    result = {'execution_error': str(error), 'execution_attempted': True}
+                event('tool.output', input=call, output=result)
                 attempted_reads += kind == 'read'
                 attempted_writes += kind == 'write'
-                if emit:
-                    emit('tool.output',input=call,output=result)
-                status = ledger.observe(copy.deepcopy(call), result, kind)
+                status = ledger.observe(call, result, kind)
                 if status == 'succeeded':
                     evidence.observe(name, result)
-                    read_executed |= kind == 'read'
-                    write_executed |= kind == 'write'
-                if status == 'uncertain' and kind not in ('read', 'meta') and name != 'sys.ask_missing_info':
-                    reason = 'uncertain_outcome'
-                # Do not continue the batch after a clarification, even if its
-                # result is unusual. It is still an actual logged meta call.
-                clarification |= name == 'sys.ask_missing_info'
-            prompt_result = result
-            if memory_mode:
-                prompt_result = {
-                    'source_id': 'observation_' + str(len(trace) + 1),
-                    'source_type': 'controller_feedback' if not check['ok'] else 'environment_result',
-                    'result': result,
-                }
-            messages.append({'role':'tool','name':name,'content':prompt_result})
-            entry = {'call': call, 'result': result}
+            assistant['tool_calls'].append(call)
+            wrapped = {'source_id': 'observation_' + str(len(trace)+1),
+                       'source_type': 'environment_result' if executed else 'controller_feedback',
+                       'executed': executed, 'execution_status': status, 'result': result}
+            messages.append({'role': 'tool', 'name': name, 'content': wrapped})
+            entry = {'call': call, 'result': result, 'executed': executed, 'status': status}
             trace.append(entry)
-            batch_trace.append(entry)
+            batch.append(entry)
             if time.monotonic() >= deadline:
                 reason = 'deadline'
                 break
-            if clarification or reason == 'uncertain_outcome':
+            if executed and name == 'sys.ask_missing_info':
+                reason = 'clarification'
                 break
-        if reason in ('deadline', 'uncertain_outcome'):
+            if executed and status == 'uncertain' and kind not in ('read', 'meta'):
+                reason = 'uncertain_outcome'
+                break
+        if reason in ('deadline', 'clarification', 'uncertain_outcome'):
             break
-        if clarification:
-            reason = 'clarification'
-            break
-        if ledger.stagnant(batch_trace):
+        if ledger.stagnant(batch):
             reason = 'no_progress'
             break
-    return {'tool_calls':env.get_tool_calls(),'state_hash':env.get_state_hash()}, {
-        'termination':reason,'trace':trace,
-        'memory_mode': memory_mode, 'current_memory': current_memory,
-        'memory_revisions': memory_revisions,
-        'decisions': decisions, 'planning': planning, 'current_plan': current_plan,
-        'plan_revisions': plan_revisions, 'protocol_errors': protocol_errors,
-        'validation_rejections': validation_rejections, 'execution_ledger': ledger.records,
-        'attempted_reads':attempted_reads,'attempted_writes':attempted_writes,
-        'read_succeeded':read_executed,'write_succeeded':write_executed}
+    return {'tool_calls': env.get_tool_calls(), 'state_hash': env.get_state_hash()}, {
+        'termination': reason, 'task_success_verified': False, 'controller': 'single',
+        'trace': trace, 'execution_ledger': ledger.records, 'decisions': decisions,
+        'protocol_errors': protocol_errors, 'validation_rejections': validation_rejections,
+        'attempted_reads': attempted_reads, 'attempted_writes': attempted_writes}

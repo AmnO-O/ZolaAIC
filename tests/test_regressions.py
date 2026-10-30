@@ -194,7 +194,7 @@ class RegressionTests(unittest.TestCase):
         actual,log=self.execute([user('Tạo ghi chú')],[call('notes.create',content='x')],
             responses={'notes.create':{'ok':False,'error':'failed'}})
         self.assertEqual(len(actual),1)
-        self.assertFalse(log['write_succeeded'])
+        self.assertFalse(any(r['status']=='succeeded' for r in log['execution_ledger']))
         self.assertEqual(log['attempted_writes'],1)
         self.assertEqual(log['termination'],'execution_failed')
 
@@ -202,7 +202,7 @@ class RegressionTests(unittest.TestCase):
         actual,log=self.execute([user('Tạo ghi chú và báo thức')],
             [call('notes.create',content='x'),call('alarm.create',time='t')],
             responses={'notes.create':{'ok':False,'error':'failed'}})
-        self.assertTrue(log['write_succeeded'])
+        self.assertTrue(any(r['status']=='succeeded' for r in log['execution_ledger']))
         self.assertEqual(log['termination'],'execution_failed')
 
     def test_full_catalog_is_provided_without_lexical_pruning(self):

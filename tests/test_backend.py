@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from lifemate.backend import parse_calls, chat_messages
+from lifemate.messages import parse_calls, chat_messages
 from lifemate.evaluation import call_metrics, token_f1
 
 

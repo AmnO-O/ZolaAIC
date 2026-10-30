@@ -1,59 +1,13 @@
-# Clean runtime architecture
+# Single agent
 
-Audio and observed history → Gipformer ASR → general system instructions and
-full permitted tool schemas → Qwen native tool calls → allowlist, evidence and
-organiser schema validation → the same ToolEnv → observed results → next decision.
+Audio/history -> Gipformer -> original transcript plus phone annotation -> fixed policy and full permitted schemas -> native calls or [] -> allowlist/evidence/organiser schema checks -> sequential ToolEnv calls -> labelled actual results -> next decision.
 
-An empty decision stops immediately. Clarification stops its batch. Deadlines
-and a turn limit bound execution. Failed executions remain visible; the harness never automatically retries writes.
-Planning format errors get one bounded correction opportunity, not a tool call.
-An uncertain mutation stops the sample; repeated observations terminate without progress.
+There is one controller (`agent.py`). No memory, plan, variants, router, reviewer, task-specific tool-name mapping or argument rewriting. Model weights and ASR are pinned in configs/baseline.json. The same backend can run the base control or a locally merged trained adapter. The optional adapter must carry the policy hash written by train_adapter.py.
 
-| Module | Responsibility |
-| --- | --- |
-| `input_adapter`, `scripts/infer.py` | Permitted metadata/audio, one environment per sample, export actual calls/hash, failure isolation |
-| `asr`, `backend`, `prompt_cache` | Local inference, parameter/context limits, sample-scoped KV cache |
-| `messages` | Native conversation serialization and call parsing |
-| `prompts`, `prompt_assets/` | General system instruction and optional planning overlay via Steerability SystemPrompt |
-| `planning` | Parse brief action plans alongside native calls, with explicit stop/protocol checks |
-| `execution` | Actual success/failure/uncertainty ledger, duplicate-write and repeated-observation guards |
-| `context` | Remove redundant installed-app schema metadata from prompt context |
-| `agent` | Bounded validate/execute/observe loop |
-| `grounding` | Successful current/historical tool evidence, explicit user data and trusted context |
-| `validation` | Evidence and clarification checks; no domain intent interpretation |
-| `catalog` | Unique explicit read-tool mentions in schema descriptions, restricted to allowed tools |
-| `values` | Pure Unicode, phone and ID parsing |
-| `step_log`, evaluation scripts | Private diagnostics; diagnostic F1 is not an official score |
-| `scripts/validate_submission.py` | Coverage/structure validation without app state access |
+Raw rejected outputs stay in logs, not execution history. A bounded protocol correction says explicitly that nothing in that proposal executed. Validation rejections are labelled controller feedback. Real outcomes are labelled succeeded/failed/uncertain, preserving the raw result. Only successful real results update evidence. Uncertain writes stop; confirmed duplicate writes are blocked. Native batches are executed sequentially, not transactionally; the model must respect result dependencies.
 
-## Removed
+All allowed tools are present on each turn. There is no implicit semantic goal verifier. Normal stop, clarification, validation failure, execution failure, uncertainty, no progress, turn limit and deadline are distinct diagnostics. The submission comes exclusively from the same environment's actual call log and final hash.
 
-* A/B prompt variants and static few-shot examples with lexical selection.
-* Handwritten app keywords, tool pruning and recovery expansion.
-* Handwritten entity-to-lookup mapping. Ambiguous catalog references have no hint.
-* Keyword nudges for notifications or conditional actions after a model stop.
-* Forced bill lookup rules inferred from Vietnamese words.
-* Automatic rewriting of addresses/event destinations, appended calendar end
-  times, and clearing bill filters.
+The history is retained in full; context overflow fails instead of silently truncating. Exact-token common prefixes may reuse KV cache. Every sample resets the cache. No guaranteed speedup is claimed. Training and inference use the same chat serialization, tool schemas, context formatting and result envelope.
 
-The model owns semantic decisions. Code validates explicit structural/evidence
-constraints. Spoken-digit phone parsing remains as deterministic annotation of
-user text; assistant prose and failed tool results do not supply trusted phones.
-Tool schemas and organiser validation remain authoritative.
-
-## Migration and limitations
-
-Use `PROMPT_MODE="system"`. The public notebook uses `clean` with 27 seconds;
-the generic notebook uses `planning` with 90 seconds and 16 decisions for development.
-See [planning.md](planning.md) for the protocol and limitations. The old `continue_after_read` and `full_tools` Python
-arguments and `lifemate.routing` module are removed. Old modes/variants fail
-explicitly rather than silently selecting different experiments. Previous
-versions remain in Git history; previous measured F1 is not inherited.
-
-This cleanup improves separation of responsibilities, not proven model accuracy.
-The model may still choose wrong branches, stop prematurely, or select incorrect
-but grounded values. Evidence IDs are currently scoped to source app, not a
-complete typed model of every entity collection. Explicit catalog tool mentions
-are hints, not proof of return semantics. Full GPU evaluation, final-state
-verification and A30 timing remain necessary. Never inspect environment files;
-all app data access stays inside the single ToolEnv.
+Remaining limitations: app-scoped IDs can still reference a wrong same-app entity; state freshness and intentional duplicate actions need task reasoning; malformed assistant outputs are detected after generation, not grammar-constrained; deterministic GPU kernels and 30-second wall time require testing on scoring hardware.

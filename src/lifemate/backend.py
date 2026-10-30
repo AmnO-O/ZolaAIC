@@ -1,14 +1,19 @@
 """Local Transformers baseline. All inference assets must already exist locally."""
 import os
+import json
+import hashlib
+from pathlib import Path
 import random
 import time
 
 
-from .messages import parse_calls, chat_messages
+from .messages import chat_messages, native_tools
+from .prompts import INSTRUCTION, apply_policy
+from .agent import parse_decision
 
 
 class LocalBackend:
-    def __init__(self, llm_path, asr_path=None, device='cuda:0', prompt_mode='system', asr_kind='gipformer'):
+    def __init__(self, llm_path, asr_path=None, device='cuda:0', asr_kind='gipformer'):
         if asr_kind != 'gipformer':
             raise ValueError('Only the configured Gipformer ASR is supported')
         os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
@@ -34,6 +39,13 @@ class LocalBackend:
             attn_implementation=os.environ.get('LIFEMATE_ATTN', 'sdpa')).to(device).eval()
         self.tokenizer.model_max_length = 16384
         self.model.config.max_position_embeddings = 16384
+        adapter_path = os.environ.get('LIFEMATE_ADAPTER_PATH')
+        if adapter_path:
+            metadata = json.loads((Path(adapter_path)/'lifemate_policy.json').read_text())
+            if metadata['prompt_sha256'] != hashlib.sha256(INSTRUCTION.encode()).hexdigest():
+                raise ValueError('Adapter policy differs from inference policy')
+            from peft import PeftModel
+            self.model = PeftModel.from_pretrained(self.model, adapter_path, local_files_only=True).merge_and_unload().eval()
         self.llm_parameters = sum(p.numel() for p in self.model.parameters())
         if self.llm_parameters >= 5_000_000_000:
             raise ValueError('LLM exceeds competition parameter limit')
@@ -48,22 +60,19 @@ class LocalBackend:
         if self.llm_parameters + self.asr_parameters >= 6_000_000_000:
             raise ValueError('Combined models exceed parameter limit')
         self.stats = []
-        from .prompts import PromptControls
-        self.prompt_controls=PromptControls(prompt_mode)
         from .prompt_cache import PromptCache
         self.prompt_cache = PromptCache()
         self.reuse_prompt_cache = os.environ.get('LIFEMATE_PROMPT_CACHE', '1') == '1'
         import transformers
-        import hashlib
         self.runtime_info = {'torch':torch.__version__,'transformers':transformers.__version__,
             'cuda':torch.version.cuda,'device':str(next(self.model.parameters()).device),
             'dtype':str(next(self.model.parameters()).dtype),
             'configured_attention':self.model.config._attn_implementation,
             'deterministic_algorithms':torch.are_deterministic_algorithms_enabled()}
-        self.runtime_info['prompt_variant'] = self.prompt_controls.variant
-        self.runtime_info['prompt_mode'] = prompt_mode
+        self.runtime_info['adapter_path'] = adapter_path
+        self.runtime_info['policy'] = 'single'
         self.runtime_info['prompt_sha256'] = hashlib.sha256(
-            getattr(self.prompt_controls, 'instruction', '').encode('utf-8')).hexdigest()
+            INSTRUCTION.encode('utf-8')).hexdigest()
         if str(device).startswith('cuda'):
             self.runtime_info['gpu'] = torch.cuda.get_device_name(device)
 
@@ -72,16 +81,7 @@ class LocalBackend:
 
     def decide(self, messages, tools, remaining_seconds):
         text = self._generate(messages, tools, remaining_seconds)
-        if self.prompt_controls.variant == 'direct':
-            from .direct import parse_direct_response
-            return parse_direct_response(text)
-        if self.prompt_controls.variant == 'planning':
-            from .planning import parse_planning_response
-            return parse_planning_response(text)
-        if self.prompt_controls.variant in ('memory_full', 'memory_compact'):
-            from .memory import parse_memory_response
-            return parse_memory_response(text)
-        return parse_calls(text)
+        return parse_decision(text)
 
     def _generate(self, messages, tools, remaining_seconds, max_tokens=384, controls=True, phase='llm'):
         if remaining_seconds <= 0:
@@ -93,12 +93,10 @@ class LocalBackend:
             def __call__(self, input_ids, scores, **kwargs):
                 return time.monotonic() >= end
 
-        native_tools = [{'type': 'function', 'function': {
-            'name': t['name'], 'description': t.get('description', ''),
-            'parameters': t['parameters']}} for t in tools]
-        turns = self.prompt_controls.apply(chat_messages(messages),tools) if controls else messages
+        rendered_tools = native_tools(tools)
+        turns = apply_policy(chat_messages(messages)) if controls else messages
         encoded = self.tokenizer.apply_chat_template(
-            turns, tools=native_tools, add_generation_prompt=True,
+            turns, tools=rendered_tools, add_generation_prompt=True,
             tokenize=True, return_tensors='pt', return_dict=True)
         tokens = encoded['input_ids'].shape[-1]
         token_ids = encoded['input_ids'][0].tolist()
@@ -107,7 +105,7 @@ class LocalBackend:
             raise ValueError('Context exceeds 16K; refusing silent truncation')
         emit = getattr(self, 'trace_event', None)
         if emit:
-            emit(phase + '.input', input={'messages': turns, 'tools': native_tools,
+            emit(phase + '.input', input={'messages': turns, 'tools': rendered_tools,
                  'rendered_prompt': self.tokenizer.decode(encoded['input_ids'][0], skip_special_tokens=False)},
                  input_tokens=tokens, max_new_tokens=budget)
         encoded = {k: v.to(self.device) for k, v in encoded.items()}
@@ -166,5 +164,4 @@ class LocalBackend:
 
 def create_backend():
     return LocalBackend(os.environ['LIFEMATE_LLM_PATH'], os.environ.get('LIFEMATE_ASR_PATH'),
-        prompt_mode=os.environ.get('LIFEMATE_PROMPT_MODE','system'),
         asr_kind=os.environ.get('LIFEMATE_ASR_KIND','gipformer'))

@@ -1,9 +1,0 @@
-
-WORKING MEMORY EXPERIMENT:
-Every response must contain exactly one <memory>...</memory> block followed by native tool calls or literal [] to request termination. No other prose or separate plan.
-Keep memory concise (at most 1600 characters; this is a character limit, not a token guarantee). Use short headings: Goal; Confirmed [source]; Completed; Remaining/uncertain.
-Preserve the original request, negations, conditional branches, independent tasks, relevant identifiers, amounts, times and durations. Do not silently repair uncertain ASR. The original request remains authoritative over your interpretation.
-Memory describes only observations already received. Proposed calls have not succeeded yet. Tool results override tentative plans. Controller validation feedback is not application data. Memory itself is never evidence.
-Results carry stable source_id and source_type labels. Controller feedback, failed results and uncertain outcomes do not establish successful application facts. Retain source references when carrying facts forward. Do not invent source references or IDs. If a needed fact is no longer available, retrieve it through permitted tools.
-Emit together only calls that are independent in both arguments and required outcomes. Wait for conditional observations before entering that branch; wait for a successful mutation before announcing its success.
-When no supported work remains, emit memory followed by []. Do not mark completion merely because you proposed a call.

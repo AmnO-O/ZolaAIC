@@ -1,50 +1,18 @@
-"""One general system prompt; no sample-specific examples or lexical selection."""
+"""One fixed policy shared by inference and supervised training."""
 import copy
-import os
+import json
 from pathlib import Path
-import sys
 
 INSTRUCTION = (Path(__file__).parent / 'prompt_assets/system.txt').read_text(encoding='utf-8')
 
 
-class PromptControls:
-    def __init__(self, mode='system'):
-        self.variant = os.environ.get('LIFEMATE_PROMPT_VARIANT', 'clean')
-        if self.variant not in ('direct', 'clean', 'planning', 'memory_full', 'memory_compact'):
-            raise ValueError('Use direct, clean, planning, memory_full or memory_compact; legacy prompt variants were removed')
-        if mode not in ('baseline', 'system'):
-            raise ValueError('Prompt mode must be baseline or system; legacy few-shot mode was removed')
-        self.mode = mode
-        if mode == 'baseline':
-            if self.variant != 'clean':
-                raise ValueError('Planning and memory variants require system prompt controls')
-            return
-        if self.variant == 'direct':
-            self.instruction = (Path(__file__).parent / 'prompt_assets/direct.txt').read_text(encoding='utf-8')
-            return
-        source = os.environ.get('LIFEMATE_STEERABILITY_PATH')
-        if source is None:
-            source = str(Path(__file__).resolve().parents[2] / 'vendor/steerability')
-        if Path(source, 'steerability/__init__.py').is_file():
-            sys.path.insert(0, str(Path(source).resolve()))
-        from steerability.algorithms.input_control.system_prompt.control import SystemPrompt
-        self.instruction = INSTRUCTION
-        if self.variant == "planning":
-            self.instruction += (Path(__file__).parent / "prompt_assets/planning.txt").read_text(encoding="utf-8")
-        if self.variant.startswith('memory_'):
-            self.instruction += (Path(__file__).parent / 'prompt_assets/memory.txt').read_text(encoding='utf-8')
-        self.system = SystemPrompt(text=self.instruction, mode='prepend')
-        self.system.steer()
-
-    def apply(self, messages, tools):
-        batch = [copy.deepcopy(messages)]
-        if self.mode == 'baseline':
-            return batch[0]
-        if self.variant == 'direct':
-            output = batch[0]
-            if output and output[0]['role'] == 'system':
-                output[0]['content'] = self.instruction + '\n' + output[0]['content']
-            else:
-                output.insert(0, {'role': 'system', 'content': self.instruction})
-            return output
-        return self.system.adapt_messages(batch)[0]
+def apply_policy(messages):
+    output = copy.deepcopy(messages)
+    if output and output[0]['role'] == 'system':
+        content = output[0].get('content', '')
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        output[0]['content'] = INSTRUCTION + '\n' + content
+    else:
+        output.insert(0, {'role': 'system', 'content': INSTRUCTION})
+    return output

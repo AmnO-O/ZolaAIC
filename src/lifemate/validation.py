@@ -3,44 +3,6 @@ import re
 from .catalog import lookup_for
 from .values import phone_key, explicit_phone
 
-def safe_canonicalize(name: str, arguments: dict, spec: dict) -> dict:
-    """Perform lossless, conservative argument canonicalization based on schema.
-    
-    1. Strips keys with None / null values (proven by Evaluator Probe #2b to cause instant 0 F1).
-    2. Lossless integer cast: string '500000' -> int 500000 when schema type is 'integer' and pattern is ^-?[0-9]+$.
-    3. Lossless boolean cast: string 'true'/'false' -> bool True/False when schema type is 'boolean'.
-    """
-    if not isinstance(arguments, dict):
-        return arguments
-    
-    props = spec.get('parameters', {}).get('properties', {})
-    canonical = {}
-    
-    for k, v in arguments.items():
-        if v is None:
-            continue
-        p_spec = props.get(k, {})
-        p_type = p_spec.get('type')
-        
-        # Safe integer casting
-        if p_type == 'integer' and isinstance(v, str):
-            v_str = v.strip()
-            if re.match(r'^-?[0-9]+$', v_str):
-                canonical[k] = int(v_str)
-                continue
-        
-        # Safe boolean casting
-        if p_type == 'boolean' and isinstance(v, str):
-            v_lower = v.strip().lower()
-            if v_lower in ('true', 'false'):
-                canonical[k] = (v_lower == 'true')
-                continue
-                
-        canonical[k] = v
-        
-    return canonical
-
-
 def validate_evidence(evidence, tool, arguments, available=()):
     available_names = set(available.keys()) if isinstance(available, dict) else {
         t['name'] if isinstance(t, dict) else t for t in available}

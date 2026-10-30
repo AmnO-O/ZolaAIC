@@ -39,3 +39,10 @@ def chat_messages(messages):
                            else json.dumps(content, ensure_ascii=False)})
     return output
 
+
+
+def native_tools(tools):
+    """Exact schemas, same template representation in training and inference."""
+    return [{'type': 'function', 'function': {
+        'name': t['name'], 'description': t.get('description', ''),
+        'parameters': t['parameters']}} for t in tools]

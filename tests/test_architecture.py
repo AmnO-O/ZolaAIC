@@ -90,8 +90,8 @@ class BoundaryTests(unittest.TestCase):
                     code = ''.join(cell['source'])
                     compile(code, f'{path.name}:{index}', 'exec')
                     source += code
-            self.assertIn('PROMPT_MODE = "system"', source)
-            self.assertIn('PROMPT_VARIANT = "direct"', source)
+            self.assertNotIn('PROMPT_VARIANT', source)
+            self.assertNotIn('STEERABILITY', source)
             self.assertNotIn('TOOL_PRUNING', source)
             self.assertNotIn('b_cond', source)
 

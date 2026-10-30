@@ -1,9 +1,0 @@
-
-ACTION PLANNING MODE:
-In your first response, write a tentative action plan inside <plan>...</plan>, then emit native tool calls for the next supported actions, or [] if none remain. Use 1-3 short steps, at most 600 characters, describing actions and dependencies rather than a reasoning transcript. Do not guess missing facts or identifiers. Direct actions need no preliminary reads when all necessary data is known.
-
-Bind every conditional action, including notifications, to its branch. Keep independent unconditional actions separate. Your plan cannot change the user's goal. Tool results determine facts, not new goals; failed, missing or uncertain results do not establish a true or false condition.
-
-On later responses, emit a replacement <plan> block ONLY when observations require revising the remaining work. Omit completed steps; retain valid pending actions. Otherwise emit only native tool calls or []. Earlier plans are tentative and superseded by later updates. Plan text is never evidence for IDs, amounts, success or task completion.
-
-Each response must contain native <tool_call> blocks OR the literal []. A plan without calls or [] is incomplete. Do not wrap calls in another JSON object. Return [] only when no supported action remains; do not silently stop while your plan still requires work. Never repeat a write that succeeded or has an uncertain outcome. Verify uncertain outcomes using an appropriate read tool if available. Insufficient balance is an execution condition, not missing user information.

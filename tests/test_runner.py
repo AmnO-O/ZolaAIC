@@ -52,14 +52,6 @@ class Backend:
   if os.environ.get('SIMULATE_FAILURE')=='1':raise RuntimeError('invented model failure')
   assert 'REFERENCE_MUST_NOT_LEAK' not in str(messages)
   assert 'LABEL_MUST_NOT_LEAK' not in str(messages)
-  if os.environ.get('LIFEMATE_PROMPT_VARIANT','').startswith('memory_'):
-   from lifemate.planning import Decision
-   if any(m['role']=='tool' for m in messages):return Decision(memory_update='No remaining work')
-   return Decision(tool_calls=[{'name':'memo.create','arguments':{'text':'invented memo'}}],memory_update='Create memo')
-  if os.environ.get('LIFEMATE_PROMPT_VARIANT')=='planning':
-   from lifemate.planning import Decision
-   if any(m['role']=='tool' for m in messages):return Decision(plan_update='No remaining work')
-   return Decision([{'name':'memo.create','arguments':{'text':'invented memo'}}], 'Create the requested memo')
   if any(m['role']=='tool' for m in messages):
    return []
   return [{'name':'memo.create','arguments':{'text':'invented memo'}}]
@@ -71,7 +63,7 @@ def create():return Backend()
             environment['RESET_LOG']=str(base/'resets.txt')
             result=subprocess.run([sys.executable,'-B',str(root/'scripts/infer.py'),
                 '--split-dir',str(split),'--backend','fake_backend:create','--budget-seconds','60','--output',str(output),
-                '--step-log',str(base/'steps.jsonl'),'--verbose-steps','--prompt-variant','direct'],
+                '--step-log',str(base/'steps.jsonl'),'--verbose-steps'],
                 env=environment,capture_output=True,text=True,timeout=20)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(len((base/'resets.txt').read_text().splitlines()),2)
@@ -80,7 +72,7 @@ def create():return Backend()
             self.assertEqual(row['state_hash'],'0'*64)
             trace=json.loads(output.with_suffix('.trace.jsonl').read_text())
             self.assertEqual(trace['termination'],'finished')
-            self.assertEqual(trace['controller'], 'direct_v2')
+            self.assertEqual(trace['controller'], 'single')
             self.assertFalse(trace['task_success_verified'])
             self.assertEqual(trace['budget_seconds'],60)
             raw_steps=(base/'steps.jsonl').read_text(encoding='utf-8')
@@ -113,21 +105,6 @@ def create():return Backend()
             self.assertIn('sample.error',[event['stage'] for event in failure_events])
             self.assertEqual(failure_events[-1]['termination'],'error')
             self.assertEqual(failure_events[-1]['output']['tool_calls'],[])
-            planning_output = base/'planning.jsonl'
-            planning_run = subprocess.run([sys.executable, '-B', str(root/'scripts/infer.py'),
-                '--split-dir', str(split), '--backend', 'fake_backend:create', '--output', str(planning_output),
-                '--prompt-variant', 'planning', '--max-turns', '16', '--budget-seconds', '90',
-                '--step-log', str(base/'planning.steps.jsonl')],
-                env=environment, capture_output=True, text=True, timeout=20)
-            self.assertEqual(planning_run.returncode, 0, planning_run.stderr)
-            planning_row = json.loads(planning_output.read_text())
-            self.assertEqual(planning_row['tool_calls'], row['tool_calls'])
-            self.assertNotIn('plan', planning_row)
-            planning_trace = json.loads(planning_output.with_suffix('.trace.jsonl').read_text())
-            self.assertTrue(planning_trace['planning'])
-            self.assertEqual(planning_trace['budget_seconds'], 90)
-            self.assertEqual(planning_trace['max_turns'], 16)
-            self.assertEqual(len(planning_trace['plan_revisions']), 2)
             original=json.loads((split/'train.jsonl').read_text())
             (split/'train.jsonl').write_text('\n'.join(json.dumps({**original,'id':sample_id})
                 for sample_id in ('broken','good')))
@@ -143,26 +120,7 @@ def create():return Backend()
             self.assertTrue(partial_trace[0]['missing_submission_row'])
             self.assertEqual(partial_trace[0]['error_type'],'RuntimeError')
             self.assertEqual(partial_trace[1]['termination'],'finished')
-            self.assertEqual(len((base/'resets.txt').read_text().splitlines()),10)
-            # Exercise both new modes through the actual CLI, including fresh per-sample environments.
-            for variant in ('memory_full', 'memory_compact'):
-                target = base/(variant + '.jsonl')
-                creations = base/(variant + '.creations.txt')
-                run = subprocess.run([sys.executable, '-B', str(root/'scripts/infer.py'),
-                    '--split-dir', str(split), '--backend', 'fake_backend:create',
-                    '--output', str(target), '--prompt-variant', variant,
-                    '--step-log', str(base/(variant + '.steps.jsonl'))],
-                    env={**environment, 'ENV_CREATION_LOG': str(creations)},
-                    capture_output=True, text=True, timeout=20)
-                self.assertNotEqual(run.returncode, 0)  # synthetic broken sample remains isolated
-                self.assertEqual(creations.read_text().splitlines(), ['broken', 'good'])
-                exported = json.loads(target.read_text())
-                self.assertEqual(exported['tool_calls'], row['tool_calls'])
-                self.assertEqual(set(exported), {'id', 'tool_calls', 'state_hash'})
-                traces = [json.loads(line) for line in target.with_suffix('.trace.jsonl').read_text().splitlines()]
-                self.assertEqual(traces[1]['memory_mode'], variant)
-                self.assertEqual(len(traces[1]['memory_revisions']), 2)
-                self.assertEqual(traces[1]['termination'], 'finished')
+            self.assertEqual(len((base/'resets.txt').read_text().splitlines()),8)
 
 
 if __name__=='__main__':unittest.main()

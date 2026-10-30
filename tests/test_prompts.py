@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from lifemate.prompts import INSTRUCTION, PromptControls
+from lifemate.prompts import INSTRUCTION, apply_policy
 
 
 class PromptTests(unittest.TestCase):
@@ -14,8 +14,7 @@ class PromptTests(unittest.TestCase):
                     {'role': 'user', 'content': 'Yêu cầu hiện tại'},
                     {'role': 'tool', 'name': 'service.read', 'content': 'OBSERVED_ID'}]
         original = copy.deepcopy(messages)
-        controls = PromptControls('system')
-        output = controls.apply(messages, [{'name': 'service.act'}])
+        output = apply_policy(messages)
         self.assertEqual(messages, original)
         self.assertEqual(output[1:], original[1:])
         self.assertIn(INSTRUCTION, output[0]['content'])
@@ -29,19 +28,9 @@ class PromptTests(unittest.TestCase):
         self.assertLess(len(INSTRUCTION.split()), 400)
 
     def test_system_prefix_is_stable_across_observations(self):
-        controls = PromptControls('system')
         messages = [{'role': 'system', 'content': 'context'}, {'role': 'user', 'content': 'request'}]
         later = messages + [{'role': 'tool', 'content': 'new observation'}]
-        self.assertEqual(controls.apply(messages, [])[0], controls.apply(later, [])[0])
-
-    def test_baseline_is_explicit_noop(self):
-        messages = [{'role': 'user', 'content': 'task'}]
-        self.assertEqual(PromptControls('baseline').apply(messages, []), messages)
-
-    def test_legacy_mode_fails_instead_of_silently_changing_experiment(self):
-        with self.assertRaises(ValueError):
-            PromptControls('steerability')
+        self.assertEqual(apply_policy(messages)[0], apply_policy(later)[0])
 
 
-if __name__ == '__main__':
-    unittest.main()
+if __name__ == '__main__': unittest.main()

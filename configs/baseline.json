@@ -27,7 +27,6 @@
   "prompt_mode": "system",
   "seed": 42,
   "sample_budget_seconds": 27,
-  "status": "Direct native-action baseline; synthetic checks only until a new GPU benchmark is recorded",
-  "controller": "direct_v2",
-  "prompt_variant": "direct"
+  "status": "Single pipeline and causal SFT path; untrained base is a control, not a validated solution",
+  "controller": "single"
 }
