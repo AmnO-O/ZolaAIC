@@ -56,5 +56,40 @@ class PlannerCallerTests(unittest.TestCase):
                     '{"next":"unknown","goal":"x","query":"x"}']:
             with self.assertRaises(ValueError):parse_step(raw)
 
+    def test_app_route_selects_whole_permitted_group_and_keeps_history(self):
+        tools=TOOLS+[
+            {'name':'a.write','kind':'write','parameters':{}},
+            {'name':'b.read','kind':'read','parameters':{}},
+            {'name':'sys.ask_missing_info','kind':'meta','parameters':{}}]
+        backend=Backend([json.dumps({'next':'call','goal':'read app a','apps':['a']})])
+        selected=[]
+        original_decide=backend.decide
+        def decide(messages,visible,seconds):
+            selected.extend(t['name'] for t in visible)
+            return original_decide(messages,visible,seconds)
+        backend.decide=decide
+        controller=PlannerCaller(backend,tools,CATALOG,routing='apps')
+        messages=[{'role':'system','content':{'context':{'marker':'CONTEXT'}}},
+            {'role':'user','content':'read'},
+            {'role':'tool','content':{'result':'REAL_OBSERVATION'}}]
+        original=copy.deepcopy(messages)
+        controller.decide(messages,tools,10)
+        self.assertEqual(set(selected),{'a.read','a.write','sys.ask_missing_info'})
+        self.assertEqual(messages,original)
+        self.assertIn('REAL_OBSERVATION',str(backend.caller_inputs))
+        self.assertIn('CONTEXT',str(backend.caller_inputs))
+        self.assertEqual(controller.steps[0]['routing']['mode'],'apps')
+
+    def test_invalid_app_plan_falls_back_and_cannot_expand_allowlist(self):
+        for apps in [['unknown'],['a.read'],['a','a'],[],[1]]:
+            backend=Backend([json.dumps({'next':'call','goal':'read','apps':apps})])
+            controller=PlannerCaller(backend,TOOLS,CATALOG,routing='apps')
+            controller.decide([{'role':'user','content':'đọc thông tin'}],TOOLS,10)
+            self.assertTrue(controller.steps[0]['planner_error'])
+            self.assertEqual(controller.steps[0]['routing']['mode'],'bm25_fallback')
+            self.assertNotIn('planner_guidance',str(backend.caller_inputs))
+        with self.assertRaises(ValueError):
+            parse_step('{"next":"done","goal":"done","apps":["a"]}',{'a'})
+
 
 if __name__=='__main__':unittest.main()

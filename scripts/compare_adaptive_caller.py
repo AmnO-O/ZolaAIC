@@ -24,7 +24,10 @@ def main():
         parser.add_argument('--' + flag, required=True)
     parser.add_argument('--seconds', type=float, default=90)
     parser.add_argument('--top-k', type=int, default=8)
+    parser.add_argument('--methods',nargs='+',choices=['bm25','adaptive_plan','app_plan'],
+                        default=['bm25','adaptive_plan'])
     args = parser.parse_args()
+    if len(args.methods)!=len(set(args.methods)):raise ValueError('Duplicate methods')
     if not 0 < args.seconds < float('inf') or args.top_k < 1:
         raise ValueError('Invalid limits')
     split = SplitInput(args.train_dir)
@@ -55,7 +58,7 @@ def main():
             tools = split.tools(row)
             messages = prompt(row, split.catalog)
             original = '\n'.join(m['content'] for m in messages if m['role'] == 'user')
-            order = ['bm25', 'adaptive_plan']
+            order = list(args.methods)
             if index % 2:
                 order.reverse()
             hashes = []
@@ -64,7 +67,8 @@ def main():
                 backend.stats = []
                 start = time.monotonic()
                 end = start + args.seconds
-                controller = PlannerCaller(backend, tools, split.catalog, args.top_k)
+                controller = PlannerCaller(backend, tools, split.catalog, args.top_k,
+                    routing='apps' if method=='app_plan' else 'bm25')
                 record = {'id': identifier, 'method': method}
                 if method == 'bm25':
                     visible, routing = CatalogSearch(tools, split.catalog).select([original], args.top_k)
@@ -88,7 +92,15 @@ def main():
                         prediction = {'tool_calls': env.get_tool_calls(), 'state_hash': env.get_state_hash()}
                 elapsed = time.monotonic() - start
                 # Gold is evaluator-only; neither role nor retrieval receives it.
+                gold_names={c['name'] for c in row['label']['tool_calls']}
+                shown_sets=([set(record['routing']['selected_names'])] if method=='bm25' else
+                    [set(s['routing']['selected_names']) for s in controller.steps if 'routing' in s])
+                initial=shown_sets[0] if shown_sets else set()
+                cumulative=set().union(*shown_sets)
+                recall=lambda shown:len(shown&gold_names)/len(gold_names) if gold_names else 1.
                 record.update(prediction=prediction, trace=trace,
+                    initial_tool_recall=recall(initial),cumulative_tool_recall=recall(cumulative),
+                    all_gold_tools_ever_visible=gold_names<=cumulative,
                     steps=copy.deepcopy(controller.steps), generation_stats=copy.deepcopy(backend.stats),
                     elapsed_seconds=elapsed,
                     metrics=call_metrics(prediction['tool_calls'], row['label']['tool_calls'],
@@ -105,12 +117,16 @@ def main():
             '90-second development budget includes planning; official limit remains 30 seconds',
             'Both arms retain original context and complete observed history',
             'Adaptive arm replans every round and sends the current goal to Caller',
-            'Contrast changes both retrieval updates and Caller guidance; not a guidance-only ablation']}
-    for method in ('bm25', 'adaptive_plan'):
+            'app_plan routes all permitted schemas of selected apps; invalid plans fall back to BM25',
+            'Cumulative recall measures ever-visible schemas, not availability at the required moment']}
+    for method in args.methods:
         selected = [r for r in records if r['method'] == method]
         summary['methods'][method] = {
             'samples': len(selected),
             'diagnostic_f1': statistics.mean(r['metrics']['f1'] for r in selected),
+            'initial_tool_recall':statistics.mean(r['initial_tool_recall'] for r in selected),
+            'cumulative_tool_recall':statistics.mean(r['cumulative_tool_recall'] for r in selected),
+            'all_gold_tools_ever_visible':sum(r['all_gold_tools_ever_visible'] for r in selected),
             'mean_seconds': statistics.mean(r['elapsed_seconds'] for r in selected),
             'samples_ge_30s': sum(r['elapsed_seconds'] >= 30 for r in selected),
             'termination_counts': dict(Counter(r['trace']['termination'] for r in selected)),
