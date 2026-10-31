@@ -41,3 +41,24 @@ The adapter was downloaded privately and independently checked on CPU: 64 tensor
 Before a longer run, audit retained/skipped length distributions and expected cost across the full data. Before claiming model improvement, evaluate frozen base and adapter on the same validation samples with the **same compact query/schema contract**, without gold target-schema repair. The default full-schema inference notebook has not yet been adapted to this contract. Eventually repeat with real ASR and the official runtime constraints. The one-step adapter should not replace the default inference model.
 
 All 66 CPU tests passed, including causal data separation, train-only schema repair, missing validation targets, loss masks, tiny-model gradients and existing execution checks. Notebook code cells were syntax-checked. No external API or environment files were used to label competition test data.
+
+## Top-10 follow-up
+
+At the user's request, the same source, data split, seed and QLoRA settings were tested again with 10 retrieval seeds instead of 8. Private job: https://www.kaggle.com/code/amnpham/lifemate-compact-k10-caller-sft . The same 8 train / 2 validation examples, messages and targets were verified; K8 schema sets are subsets of their K10 counterparts. Final schema counts can exceed 10 because dependencies, clarification and train-only target repair are included.
+
+| Metric | Top 8 | Top 10 |
+| --- | ---: | ---: |
+| Train targets requiring gold schema repair, out of 4,204 | 728 | 544 |
+| Validation targets missing schema, out of 664 | 107 | 90 |
+| Validation targets retained before length filtering | 557 | 574 |
+| Train smoke sequence length | 1,760–3,247 | 2,101–3,563 |
+| Actual train smoke schemas per example | 10–13 | 11–16 |
+| Peak PyTorch allocated GPU memory | 6.41 GiB | 7.00 GiB |
+| Trainer runtime including in-loop validation | 128.52 s | 144.98 s |
+| Actual optimizer steps / changed adapter tensors | 1 / 32 | 1 / 32 |
+
+K10 completed with all 8/2 examples retained and no truncation. Train loss was 1.5424, validation loss 0.05984 on only two retrieval-covered examples; neither value establishes task accuracy. Adapter delta was approximately 0.0001. The independently downloaded K10 adapter contains 64 finite tensors, including 32 nonzero LoRA-B tensors, and remains private in `artifacts/kaggle_compact_k10_sft_results/training/50baebe2d4bc/training/adapter/`. No long training or F1 evaluation was run.
+
+The full K10 tokenization audit had no template/encoding errors. Of 4,204 train targets, 407 exceed the current 4,096-token cap (133 are stop targets); median length 2,925.5, p95 4,468, maximum 6,262. Of the 574 schema-covered validation targets, 35 exceed the cap; maximum 4,993. A full run at the current cap would retain 3,797 train and 539 validation targets after length filtering. This is a separate limitation from the 90 validation targets whose tools were missed. Long examples must be reported rather than silently truncated, and their removal can bias the task mix.
+
+The notebook now defaults to `RETRIEVAL_TOP_K = 10`, still pinned to the tested source. Set it to 8 to reproduce the original check. Top 10 reduces missing schemas but does not guarantee complete retrieval or better F1. Address the remaining missing schemas and long targets before treating this as a full training recipe. Batch size remains **1 per GPU, gradient accumulation 8, effective batch size 8**; an example is one next-action/stop prediction, not an entire request trajectory.
