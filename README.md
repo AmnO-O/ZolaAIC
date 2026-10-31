@@ -33,8 +33,8 @@ Both roles share one loaded model; there is no second 4B checkpoint at inference
   pinned to its original revision. It is not Planner training, and its adapter is
   incompatible with the beyoru inference backbone. No Planner distillation has run.
 
-The inference notebooks resolve `main` and record the actual commit. Set REVISION
-to an exact commit for repeatable comparisons. Attach private `amnpham/zalochallenge`.
+The inference notebooks pin the app Planner/Caller source commit and record
+the actual checkout. Update REVISION deliberately for repeatable comparisons. Attach private `amnpham/zalochallenge`.
 Downloads/installations occur during setup; inference must use local assets only.
 
 ## Local inference
