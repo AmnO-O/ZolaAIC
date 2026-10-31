@@ -64,6 +64,29 @@ def validation_group(text, seed=42, percent=15):
     return int.from_bytes(digest[:4], 'big') % 100 < percent
 
 
+def retrieve_training_example(example, catalog, top_k=8, repair_target=False):
+    """Gold-free search; optional target-name repair is TRAIN supervision only."""
+    from .retrieval import CatalogSearch
+    search = CatalogSearch(example['tools'], catalog)
+    query = '\n'.join(m['content'] for m in example['messages']
+                      if m['role']=='user' and isinstance(m.get('content'),str))
+    observations = [m for m in example['messages'] if m['role']=='tool']
+    queries = [query]
+    if observations:
+        queries.append(json.dumps(observations[-1]['content'],ensure_ascii=False))
+    visible, routing = search.select(queries,top_k)
+    targets = {c['name'] for c in example['target'].get('tool_calls',[])}
+    missing = targets-{t['name'] for t in visible}
+    if missing and repair_target:
+        selected = search.dependencies({t['name'] for t in visible}|targets)
+        visible = [t for t in example['tools'] if t['name'] in selected]
+    result = copy.deepcopy(example)
+    result['tools'] = visible
+    result['retrieval'] = {'top_k':top_k, 'missing_before_repair':sorted(missing),
+                           'target_repaired':bool(missing and repair_target)}
+    return result, missing
+
+
 def encode_example(example, tokenizer, max_length=16384):
     """Mask all prefix tokens. Refuse template mismatch or silent truncation."""
     messages = apply_policy(chat_messages(example['messages']))

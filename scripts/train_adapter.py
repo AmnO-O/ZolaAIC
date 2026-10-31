@@ -76,8 +76,12 @@ def main():
     model.config.use_cache = False
     model = prepare_model_for_kbit_training(model, gradient_checkpointing_kwargs={'use_reentrant': False})
     frozen_io_precision(model, torch.float16)
+    targets=[name for name,_ in model.named_modules() if name.rsplit('.',1)[-1]
+             in ('q_proj','k_proj','v_proj','o_proj') and '.visual.' not in name]
+    if not targets: raise ValueError('No text attention LoRA targets')
     model = get_peft_model(model, LoraConfig(r=16, lora_alpha=32, lora_dropout=0,
-                     target_modules=['q_proj','k_proj','v_proj','o_proj'], bias='none', task_type='CAUSAL_LM'))
+                     target_modules=targets, bias='none', task_type='CAUSAL_LM'))
+    initial_adapters={n:p.detach().cpu().clone() for n,p in model.named_parameters() if p.requires_grad}
     total_steps = args.max_steps if args.max_steps > 0 else math.ceil(len(datasets['train'])/8)*args.epochs
     warmup_steps = 0 if args.smoke else math.ceil(total_steps*0.05)
     training = TrainingArguments(output_dir=str(output/'checkpoints'), num_train_epochs=args.epochs,
@@ -99,17 +103,41 @@ def main():
                       data_collator=partial(pad_batch, pad_token_id=tokenizer.pad_token_id))
     # The custom loss is a mean per sequence; let Trainer scale accumulation.
     trainer.model_accepts_loss_kwargs = False
+    # Explicit low initial scale for the bounded FP16 smoke, not a silent retry.
+    if args.smoke and trainer.accelerator.scaler is not None:
+        trainer.accelerator.scaler = torch.amp.GradScaler('cuda',init_scale=256.)
     report = {'arguments': vars(args), 'data_manifest': manifest, 'prompt_sha256': prompt_hash,
               'retained_examples': {k: len(v) for k,v in datasets.items()},
               'torch': torch.__version__, 'gpu': torch.cuda.get_device_name(0),
               'frozen_vocabulary_dtype': 'float16',
+              'lora_targets':targets, 'trainable_parameters':sum(p.numel() for p in model.parameters() if p.requires_grad),
+              'status':'started', 'smoke_initial_grad_scale':256. if args.smoke else None,
               'packages': subprocess.check_output([sys.executable,'-m','pip','freeze'],text=True)}
     (output/'training_report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-    trainer.train()
+    try:
+        trained=trainer.train()
+        changes=[]
+        for name,param in model.named_parameters():
+            if name in initial_adapters:
+                changes.append(float((param.detach().cpu().float()-initial_adapters[name].float()).abs().max()))
+        report.update(global_step=trainer.state.global_step,train_metrics=trained.metrics,
+                      changed_adapter_tensors=sum(x>0 for x in changes),max_adapter_delta=max(changes,default=0),
+                      peak_allocated_bytes=torch.cuda.max_memory_allocated())
+        if not report['changed_adapter_tensors']:
+            raise RuntimeError('No adapter weights changed; optimizer-step count alone is not proof of learning')
+        report['status']='weights_updated'
+    except Exception as error:
+        report.update(status='failed',error_type=type(error).__name__,error=str(error),
+                      peak_allocated_bytes=torch.cuda.max_memory_allocated())
+        (output/'training_report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
+        raise
+    (output/'training_report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     trainer.save_model(str(output/'adapter'))
     tokenizer.save_pretrained(str(output/'adapter'))
     (output/'adapter'/'lifemate_policy.json').write_text(json.dumps({
-        'prompt_sha256': prompt_hash, 'base_model': args.model, 'seed': 42}, indent=2))
+        'prompt_sha256': prompt_hash, 'base_model': args.model, 'seed': 42,
+        'retrieval':{k:manifest.get('retrieval',{}).get(k) for k in
+                     ('top_k','query','train_only_target_schema_supervision')}}, indent=2))
     # Validation loss is not task accuracy. The frozen adapter must run the live tool evaluator.
     metrics = trainer.evaluate()
     (output/'validation_loss.json').write_text(json.dumps(metrics, indent=2))

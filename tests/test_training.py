@@ -9,7 +9,7 @@ import unittest
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from lifemate.training import trajectory_examples, encode_example, validation_group, split_group
+from lifemate.training import trajectory_examples, encode_example, validation_group, split_group, retrieve_training_example
 
 
 TOOLS = [
@@ -47,6 +47,23 @@ class Tokenizer:
 
 
 class TrainingTests(unittest.TestCase):
+    def test_compact_schema_target_repair_is_train_only_and_not_argument_leak(self):
+        row=sample(); example=trajectory_examples(row,TOOLS,CATALOG)[0]
+        # Empty search result is replaced by a deliberate tool distractor.
+        example['messages'][-1]['content']='read unrelated data'
+        example['tools']=[{'name':'other.read','kind':'read','description':'read unrelated data',
+                           'parameters':{'type':'object','properties':{}}},*TOOLS]
+        example['target']={'role':'assistant','tool_calls':[{'name':'app.modify',
+                       'arguments':{'item_id':'TARGET_SECRET'}}]}
+        untouched=copy.deepcopy(example)
+        val,missing=retrieve_training_example(example,CATALOG,1,False)
+        self.assertEqual(missing,{'app.modify'})
+        self.assertNotIn('app.modify',[t['name'] for t in val['tools']])
+        train,missing=retrieve_training_example(example,CATALOG,1,True)
+        self.assertIn('app.modify',[t['name'] for t in train['tools']])
+        self.assertNotIn('TARGET_SECRET',str(train['messages']))
+        self.assertEqual(example,untouched)
+
     def test_no_target_or_future_result_in_input(self):
         row = sample(); original = copy.deepcopy(row)
         examples = trajectory_examples(row, TOOLS, CATALOG)
