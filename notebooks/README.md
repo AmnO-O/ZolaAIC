@@ -6,6 +6,7 @@ Upload `kaggle_pipeline.ipynb` to Kaggle for the next train test. Attach the aut
 
 # Kaggle workflows
 
+- `kaggle_sft_rl.ipynb`: private feasibility pilot, one SFT step then two interactive RL episodes. Live query printing off. Uses `main` until you pin the printed commit. Read `docs/training.md`: reward is diagnostic, not verified task success, and a zero-signal group does not update the model.
 - `kaggle_train.ipynb`: private train preparation and QLoRA. Default: one-step GPU smoke test, 8 train/2 validation examples. Full epoch requires MAX_STEPS=-1 after the smoke test works.
 - `kaggle_pipeline.ipynb`: train evaluation. Defaults to reference transcripts and three trial development IDs, 90 seconds/16 decisions. For frozen evaluation, set IDS_FILE to prepared manifest.json and ADAPTER_PATH to the adapter. Compare base and adapter on the same IDs, then switch TRAIN_TRANSCRIPTS=False for audio.
 - `kaggle_public_test.ipynb`: all public audio, 27 seconds/8 decisions, complete submission validation and manual export. No test scoring/tuning or automatic submission.
