@@ -1,17 +1,35 @@
-# Single agent
+# App Planner / Caller architecture
 
-Audio/history -> Gipformer -> original transcript plus phone annotation -> fixed policy and full permitted schemas -> native calls or [] -> allowlist/evidence/organiser schema checks -> sequential ToolEnv calls -> labelled actual results -> next decision.
+The production entry point is scripts/infer.py. It constructs PlannerCaller with
+app routing for each sample, sharing one LocalBackend across samples and roles.
+The execution loop remains run_agent; Planner never executes tools itself.
 
-There is one controller (`agent.py`). No memory, plan, variants, router, reviewer, task-specific tool-name mapping or argument rewriting. Model weights and ASR are pinned in configs/baseline.json. The same backend can run the base control or a locally merged trained adapter. The optional adapter must carry the policy hash written by train_adapter.py.
+Planner sees app IDs/descriptions derived from the sample-permitted catalog,
+context, original request and all observed conversation turns. Its strict JSON
+contract is `next`, `goal`, `apps`. Names must be permitted app namespaces, not
+function names. A call requires at least one app; done requires apps=[].
 
-Raw rejected outputs stay in logs, not execution history. A bounded protocol correction says explicitly that nothing in that proposal executed. Validation rejections are labelled controller feedback. Real outcomes are labelled succeeded/failed/uncertain, preserving the raw result. Only successful real results update evidence. Uncertain writes stop; confirmed duplicate writes are blocked. Native batches are executed sequentially, not transactionally; the model must respect result dependencies.
+Selection uses exact namespace matching against the permitted schema list. All
+functions of selected apps are supplied, plus sys.ask_missing_info if permitted.
+No app names or domain dependencies are hardcoded. A syntactically valid but
+semantically wrong app plan can still omit necessary tools. On invalid plans,
+original-request BM25 is a bounded fallback; there is no extra planning repair.
 
-All allowed tools are present on each turn. There is no implicit semantic goal verifier. Normal stop, clarification, validation failure, execution failure, uncertainty, no progress, turn limit and deadline are distinct diagnostics. The submission comes exclusively from the same environment's actual call log and final hash.
+Caller receives original messages plus a temporary system planner_guidance object.
+It does not replace user instructions or observations and is not persisted as
+facts. The harness checks evidence from original messages and actual results,
+not generated plans. The next Planner call sees actual outcomes, not a stored plan.
 
-The history is retained in full; context overflow fails instead of silently truncating. Qwen3.5 uses a fresh hybrid/recurrent state for every decision; native cache remains enabled within decoding. No cache cropping is applied to hybrid states. Every sample resets the cache. No guaranteed speedup is claimed. Training and inference use the same chat serialization, tool schemas, context formatting and result envelope.
+The backend handles checkpoint-native JSON tool calls for Qwen3/beyoru and XML
+for the historical Qwen3.5 controls. NativeOutputGuard rejects prose early;
+full calls must still pass strict parsing and schema/grounding validation.
+No arguments are rewritten. Successful writes are not repeated automatically.
 
-Remaining limitations: app-scoped IDs can still reference a wrong same-app entity; state freshness and intentional duplicate actions need task reasoning; malformed assistant outputs are detected after generation, not grammar-constrained; deterministic GPU kernels and 30-second wall time require testing on scoring hardware.
+Inference uses exactly one ToolEnv per sample. All real calls and final hash come
+from that environment. Read/write success, failed/uncertain outcomes and model
+stops are distinct. `finished` is not semantic completion verification.
 
-Current trial: Qwen/Qwen3.5-4B pinned to 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a. The full conditional-generation loader includes vision weights (unused for text) and counts them against the parameter limit. Thinking is explicitly disabled in the native template. Protocol XML parameter values are decoded from schema types; this is wire decoding, not a heuristic rewrite of JSON arguments. Invalid/truncated XML, duplicate parameters, nonempty thinking or unrelated prose is rejected.
-
-Qwen3.5 chat termination explicitly includes tokenizer <|im_end|> and configured end-of-text IDs; the checkpoint config alone uses a different EOS. Generation records whether a real assistant-turn terminator was reached. Native optional text before calls is not evidence and is ignored by the call parser; suffix text is rejected. A plain final assistant response is accepted as a model stop only after an actual stop token, never after truncation or for malformed tool markup. This does not verify task success. Chunked text prefill passes explicit positions and resets wrapper rope_deltas for each new decision.
+The default model config is configs/baseline.json (beyoru + Gipformer). Historical
+Qwen3.5 assets are described in configs/qwen35_training.json. Historical SFT remains
+pinned to its original source and does not train this Planner. Experiment runners
+live under experiments/ and never feed gold to either inference role.

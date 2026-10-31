@@ -42,7 +42,15 @@ def ToolEnv(split,sample_id,root):
  return Session()
 ''')
             (base/'fake_backend.py').write_text('''
+from lifemate.agent import Decision
 class Backend:
+ def __init__(self):self.stats=[]
+ def _generate(self,messages,tools,seconds,**kwargs):
+  import json
+  assert 'REFERENCE_MUST_NOT_LEAK' not in str(messages)
+  assert 'LABEL_MUST_NOT_LEAK' not in str(messages)
+  self._generation_complete=True
+  return json.dumps({'next':'call','goal':'Create the requested memo','apps':['memo']})
  def reset_sample(self):
   import os
   with open(os.environ['RESET_LOG'],'a') as log:log.write('reset\\n')
@@ -56,8 +64,8 @@ class Backend:
   assert 'app_descriptions' not in messages[0]['content']['context']
   assert all('_app_description' not in t for t in tools)
   if any(m['role']=='tool' for m in messages):
-   return []
-  return [{'name':'memo.create','arguments':{'text':'invented memo'}}]
+   return Decision(raw_text='[]')
+  return Decision([{'name':'memo.create','arguments':{'text':'invented memo'}}])
 def create():return Backend()
 ''')
             output=base/'submission.jsonl'
@@ -75,7 +83,8 @@ def create():return Backend()
             self.assertEqual(row['state_hash'],'0'*64)
             trace=json.loads(output.with_suffix('.trace.jsonl').read_text())
             self.assertEqual(trace['termination'],'finished')
-            self.assertEqual(trace['controller'], 'single')
+            self.assertEqual(trace['controller'], 'planner_caller_apps')
+            self.assertEqual(trace['planning'][0]['routing']['mode'],'apps')
             self.assertFalse(trace['task_success_verified'])
             self.assertEqual(trace['budget_seconds'],60)
             raw_steps=(base/'steps.jsonl').read_text(encoding='utf-8')

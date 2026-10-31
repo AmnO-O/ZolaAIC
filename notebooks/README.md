@@ -1,20 +1,18 @@
-# Qwen3.5-4B strict tool-output notebooks
+# Kaggle notebooks
 
-The train-evaluation and public-inference notebooks pin inference source to `4f7def6e1de13860f61d87b66d416fceabde62a4`. This includes the catalog-backed installed-app description dictionary and early output guard. Only consecutive native tool-call blocks or literal `[]` are accepted. Invalid prose is rejected, never treated as successful completion; at most one protocol repair is allowed within the sample budget. This is not grammar-constrained decoding or a guarantee of correct actions.
+- kaggle_pipeline.ipynb: main App Planner/Caller train evaluation. One shared beyoru
+  model, Gipformer optional via TRAIN_TRANSCRIPTS=False. Default 3 train samples,
+  90 seconds, 8 rounds, 384 Caller tokens, live logging off.
+- kaggle_public_test.ipynb: main App Planner/Caller on all public audio, 27-second
+  internal budget, full output validation and manual submission export.
+- kaggle_caller_sft.ipynb: retained frozen Qwen3.5 Caller SFT, pinned revision
+  48fd058. This is a separate training workflow; its adapter cannot load into
+  beyoru. Planner distillation has not been implemented or run.
 
-Upload `kaggle_pipeline.ipynb` to Kaggle for the next train test. Attach the authorised private dataset `amnpham/zalochallenge`, select a T4 GPU, enable internet for setup and Run All in a fresh session. Defaults: three train samples, reference transcripts, 90 seconds/sample, 16 turns, 1024 output tokens/turn, thinking disabled, private step logs on, live printing off. To test real Gipformer ASR, set `TRAIN_TRANSCRIPTS=False` before running inference. No fine-tuning or benchmark is started by downloading the notebook.
+Inference notebooks use main and record the resolved commit. Pin REVISION to that
+commit for repeatability. Keep notebook outputs and datasets private. Internet is
+needed for setup only; inference uses local models. Attach amnpham/zalochallenge.
+No notebook reads environment files directly. No automatic leaderboard submission.
 
-# Kaggle workflows
-
-- `kaggle_caller_sft.ipynb`: top-8 Caller SFT, one epoch on 3,938 retained targets, 4,096-token cap, batch 1 / accumulation 8, LR 5e-5. Saves optimizer/RNG checkpoints and stops safely after an 8-hour session for continuation. A GPU resume test advanced step 2 to 4 successfully; the long training job has started and is not yet a completed epoch. Read `docs/caller_sft_run.md` and `docs/caller_sft_flow.md`.
-- `kaggle_compact_caller_sft.ipynb`: successful one-step Qwen3.5 QLoRA feasibility check on T4 with compact schemas. Defaults to top 10 seeds: the 8-train/2-validation smoke fit at 7.00 GiB peak PyTorch allocation and changed 32 adapter tensors (top 8: 6.41 GiB). Batch 1, accumulation 8. This is not an accuracy result or full training run. Read `docs/compact_caller_sft.md` for train-only schema repair, missing tools and overlength-target limitations.
-- `kaggle_sft_rl.ipynb`: private feasibility pilot, one SFT step then two interactive RL episodes. Live query printing off. Uses `main` until you pin the printed commit. **Current real-data configuration failed backward with OOM on one T4; no SFT/RL update completed.** Read `docs/sft_rl_pilot_report.md` before running. Reward is diagnostic, not verified task success, and a zero-signal group does not update the model.
-- `kaggle_train.ipynb`: private train preparation and QLoRA. Default: one-step GPU smoke test, 8 train/2 validation examples. Full epoch requires MAX_STEPS=-1 after the smoke test works.
-- `kaggle_pipeline.ipynb`: train evaluation. Defaults to reference transcripts and three trial development IDs, 90 seconds/16 decisions. For frozen evaluation, set IDS_FILE to prepared manifest.json and ADAPTER_PATH to the adapter. Compare base and adapter on the same IDs, then switch TRAIN_TRANSCRIPTS=False for audio.
-- `kaggle_public_test.ipynb`: all public audio, 27 seconds/8 decisions, complete submission validation and manual export. No test scoring/tuning or automatic submission.
-
-Attach authorised private dataset amnpham/zalochallenge. Setup uses network to clone source/install/download public models; inference is local. No Kaggle token is required in notebooks. Each run uses a fresh output directory and one ToolEnv per sample. Keep generated data, logs, training checkpoints and notebook outputs private.
-
-The only policy is prompt_assets/system.txt. There are no prompt modes or variants. Optional adapters need requirements-train.txt and lifemate_policy.json emitted by train_adapter.py; they are merged locally into the base. Runtime reports record adapter path and policy hash. A one-step adapter is not a trained solution.
-
-Use a clean checkout or fresh Kaggle session after the reset. REVISION can pin the commit. Model load time is recorded separately from sample timing. Full step logging is for diagnosis, not speed measurements. Larger development budgets do not meet the final 30-second constraint. Read ../docs/training.md before interpreting results.
+Archived comparison runners are in ../experiments. Removed RL/obsolete smoke
+notebooks are recoverable from Git history. Checkpoints and local artifacts remain.

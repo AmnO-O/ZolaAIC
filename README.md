@@ -1,62 +1,82 @@
-# LifeMate — Qwen3.5-4B trial
+# LifeMate — App Planner / Caller
 
-One offline Vietnamese tool agent, one fixed policy, and a train-only supervised-learning path. Old memory/planning variants, Steerability, prompt switching, train priors, canonicalizers and experimental controllers have been removed. Previous implementations are in Git history.
+The main pipeline uses one shared `beyoru/Qwen3-4B-I-1209` model for two roles.
+Planner receives catalog app descriptions, the original request, context and observed
+history. It chooses the next goal and app namespaces. Python loads every permitted
+function schema in those apps; Caller chooses functions and fills arguments.
+The organiser ToolEnv executes calls, and actual observations drive the next plan.
 
-The current trial uses the official Qwen3.5-4B post-trained checkpoint without LifeMate fine-tuning, revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a (2026-03-02), with thinking disabled and a 16K input/output cap. The published full checkpoint is 4,659,865,088 parameters; the loader still checks actual loaded counts plus ASR. Native XML is decoded with schema types. This is a control, not a validated solution. Reorganizing source does not establish better task accuracy. The next model experiment is a tool-use adapter trained on causal train trajectories.
+```mermaid
+flowchart LR
+    A[Audio] --> B[Gipformer ASR]
+    B --> P[Planner: goal + apps]
+    C[Context and observed history] --> P
+    P --> S[Exact catalog schema selection]
+    S --> K[Caller: native tool calls]
+    K --> E[One ToolEnv per sample]
+    E --> C
+```
 
-Prompt context uses a single `installed_apps` dictionary mapping installed app IDs to descriptions from the split catalog. It emits no separate app-description list and adds no app-wide prefix to tool descriptions. Inference and SFT preparation use the same formatter. Regenerate prepared SFT examples after updating this prompt/context format.
+Invalid plans fall back to original-query BM25 (top 8 plus catalog dependencies).
+Valid app selections are not pruned by BM25. `sys.ask_missing_info` remains visible
+when permitted. Plans are unverified guidance, never evidence of IDs or completion.
+Both roles share one loaded model; there is no second 4B checkpoint at inference.
 
-## Files
+## Run on Kaggle
 
-- `src/lifemate/agent.py`: native-call parser and the only execution loop.
-- `src/lifemate/prompts.py`, `prompt_assets/system.txt`: fixed policy shared by training and inference.
-- `backend.py`, `asr.py`, `prompt_cache.py`: pinned local Qwen/Gipformer, deterministic decoding, exact-prefix KV cache.
-- `input_adapter.py`: public input metadata and one organiser ToolEnv per inference sample.
-- `grounding.py`, `validation.py`, `execution.py`: evidence, schema handoff and execution facts. Arguments are never rewritten.
-- `training.py`: train-only causal trajectories and assistant-only loss masks.
-- `scripts/prepare_sft.py`, `scripts/train_adapter.py`: private training data and QLoRA adapter training.
-- `scripts/infer.py`, `scripts/evaluate.py`, `scripts/evaluate_run.py`, `scripts/validate_submission.py`: inference, diagnostic evaluation and format/coverage checks.
+- [Train development](notebooks/kaggle_pipeline.ipynb): 3 train samples by default,
+  reference transcripts, 90 seconds/sample, 8 rounds, Caller ceiling 384 tokens.
+  Set TRAIN_TRANSCRIPTS=False to include real Gipformer audio. Live printing is off.
+- [Public inference](notebooks/kaggle_public_test.ipynb): real audio, all public
+  samples, 27-second internal budget and complete submission-format validation.
+- [Frozen Caller SFT](notebooks/kaggle_caller_sft.ipynb): historical Qwen3.5 training,
+  pinned to its original revision. It is not Planner training, and its adapter is
+  incompatible with the beyoru inference backbone. No Planner distillation has run.
 
-For a paired model control, `configs/qwen3_control.json` pins Qwen3-4B-Instruct-2507. Both models share the same policy and execution loop; the backend selects the checkpoint-native XML or JSON wire format. Compare with identical IDs, budgets, precision and cache settings.
+The inference notebooks resolve `main` and record the actual commit. Set REVISION
+to an exact commit for repeatable comparisons. Attach private `amnpham/zalochallenge`.
+Downloads/installations occur during setup; inference must use local assets only.
 
-## Kaggle
+## Local inference
 
-First run [the three-sample trial](notebooks/kaggle_pipeline.ipynb) with reference transcripts, then real audio. Fresh model files download to models/qwen3.5-4b; do not reuse the old models/llm directory. Cross-turn cache is disabled for hybrid recurrent state, but generation still uses its native cache within each decision. The runtime uses BF16 where supported, otherwise FP16 (T4). GPU quality and runtime must be measured before training.
-
-1. [Train adapter](notebooks/kaggle_train.ipynb): private train data, default **one-step GPU smoke test** using 8 train and 2 validation examples. Set `MAX_STEPS=-1` only after the smoke test succeeds to train one full epoch. T4 VRAM/runtime remain to be measured.
-2. [Evaluate on train](notebooks/kaggle_pipeline.ipynb): set `ADAPTER_PATH` to the adapter and `IDS_FILE` to the prepared `manifest.json` to select validation IDs. First compare base vs adapter on reference transcripts; then repeat with real Gipformer audio. Default development budget is 90 seconds, not competition compliant.
-3. [Public inference](notebooks/kaggle_public_test.ipynb): real audio, all samples, 27-second internal budget. Validate complete output before manual submission. No automatic leaderboard submission or test-label tuning.
-
-Training dependencies are in `requirements-train.txt`; inference without an adapter uses `requirements.txt`. Model downloads happen only during setup. All inference assets must be local. Training output records the resolved packages. Keep restricted generated examples, logs, checkpoints and Kaggle outputs private.
-
-## Local commands
-
-```bash
-python -m pip install -r requirements-train.txt
+```sh
+python -m pip install -r requirements.txt
 python scripts/download_models.py
-python scripts/prepare_sft.py --train-dir /path/to/train --output artifacts/sft
-python scripts/train_adapter.py --model models/qwen3.5-4b --data artifacts/sft --output artifacts/smoke --smoke
-```
-
-For inference, set `LIFEMATE_LLM_PATH`, `LIFEMATE_ASR_PATH`, `PYTHONHASHSEED=42`, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, and optionally `LIFEMATE_ADAPTER_PATH`. The backend merges a local adapter into the base before inference and checks its policy hash. Then:
-
-```bash
+# Set LIFEMATE_LLM_PATH=models/beyoru-qwen3-4b and LIFEMATE_ASR_PATH=models/asr.
+# Set HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1, PYTHONHASHSEED=42.
 python scripts/infer.py --split-dir /data --backend lifemate.backend:create_backend --output result/submission.jsonl
-python -B -m unittest discover -s tests -v
+python -m unittest discover -s tests -q
 ```
 
-The runner refuses to overwrite outputs. `--step-log result/steps.jsonl --verbose-steps` saves/prints private processing details. Old `--prompt-variant` options have been removed.
+The default runner budget is 27 seconds. `--budget-seconds 90` is development-only.
+`--step-log result/steps.jsonl` saves optional private input/output traces;
+`--verbose-steps` explicitly enables live printing. The normal trace includes plans,
+routing, rejected decisions and termination. Output files are never overwritten.
 
-## Limits
+## Source layout
 
-One ToolEnv per inference sample, app state accessed only through organiser APIs, all actual calls including failures exported with its real final hash. No direct environment-file reads. Training conversion reads train JSONL/catalog only and creates no ToolEnv. Prior assistant actions are never replayed by inference.
+- `src/lifemate/planner_caller.py`: next-step planning, app routing, fallback and Caller guidance.
+- `src/lifemate/agent.py`: the single tool execution loop and native output parsing.
+- `backend.py`, `asr.py`: local model loading and deterministic generation/transcription.
+- `catalog.py`, `context.py`, `retrieval.py`: catalog metadata and BM25 fallback.
+- `grounding.py`, `validation.py`, `execution.py`: evidence checks and execution records.
+- `scripts/infer.py`: ASR, one per-sample controller/environment and submission export.
+- `scripts/evaluate*.py`, `validate_submission.py`: diagnostic scoring and format checks.
+- `training.py`, `checkpointing.py`, `scripts/prepare_sft.py`, `train_adapter.py`: retained SFT support.
+- `experiments/`: historical comparison runners; not imported by main inference.
+- `docs/`: architecture, training notes and historical measured reports.
 
-Seeds and greedy decoding are fixed. The model remains below the parameter limits and the total inference context is capped at 16,384 tokens. Deadline checks cannot interrupt every blocking native operation. A30 compliance, GPU training and model quality are not established by CPU tests.
+## Measured limits
 
-`finished` is a model stop, not task-success verification. Branches, entity selection and semantic completeness remain model responsibilities. Evidence IDs are currently app-scoped, not a full typed provenance graph. Identical-write protection can also block intentionally repeated identical actions. Failed or uncertain writes are not claimed complete.
+On ten familiar train samples with reference transcripts and one T4, app routing
+reached diagnostic Macro F1 0.4819, mean 22.25 seconds, and one sample at or above
+30 seconds. Planner+BM25 reached 0.3361 and 32.47 seconds in the paired run.
+These are pilot results, not official score, held-out accuracy or A30 compliance.
+`finished` does not establish task success; conditional branches and entity choice
+still fail. Three app-plan errors used BM25 fallback in that run.
 
-Current F1 is diagnostic, not verified official scoring. See [architecture](docs/architecture.md) and [training protocol](docs/training.md).
-
-The generation ceiling is configurable with `LIFEMATE_MAX_NEW_TOKENS` (default 1024), or `MAX_NEW_TOKENS` in the notebooks. It applies per decision, stops early at native EOS, and remains subject to the sample deadline and 16K total context cap. The public notebook explicitly retains a 384-token ceiling pending latency validation.
-
-Inference accepts only consecutive native tool-call blocks or literal `[]`. A generation-time prefix guard stops text outside that envelope; the complete response is then parsed strictly before any calls execute. Plain text is never a successful stop, even at EOS. One protocol repair is allowed within the existing deadline/turn budget. The guard is not grammar-constrained decoding and does not verify task completion or tool-argument semantics.
+The loaded LLM must remain below 5B parameters, total models below 6B, and each
+prompt plus generation within 16,384 tokens. No code reads/copies/parses environment
+files: application data is accessed only through organiser tools. Every actual
+ToolEnv call, including failures, is exported with the real final state hash.
+Public/private test labels must never be used for training or tuning.

@@ -42,7 +42,7 @@ def main():
             row=rows[identifier];backend.reset_sample();backend.stats=[]
             start=time.monotonic();end=start+args.seconds
             tools=split.tools(row);messages=prompt(row,split.catalog)
-            controller=PlannerCaller(backend,tools,split.catalog,args.top_k)
+            controller=PlannerCaller(backend,tools,split.catalog,args.top_k,routing="bm25")
             env=None;prediction={'tool_calls':[]};trace={'termination':'error','decisions':0}
             record={'id':identifier}
             try:

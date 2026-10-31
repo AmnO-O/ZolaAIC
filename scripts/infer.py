@@ -1,8 +1,10 @@
-"""Offline runner. Requires a real backend plugin; no dummy submissions.
+"""Offline app Planner/Caller runner; no dummy submissions.
 
 Backend contract: module:factory returns an object with transcribe(path,
-remaining_seconds) and decide(messages, tools, remaining_seconds). The backend
-owns deterministic decoding, timeout enforcement, and <=16,384 total tokens.
+remaining_seconds), native decide(messages, tools, remaining_seconds), and the
+planning generation interface used by PlannerCaller (_generate, stats and
+_generation_complete). LocalBackend implements both roles with shared weights.
+The backend owns deterministic decoding and <=16,384 total tokens.
 """
 import argparse
 import importlib
@@ -19,6 +21,7 @@ from lifemate.values import annotate_spoken_phones
 from lifemate.input_adapter import SplitInput
 from lifemate.context import clean_context_for_prompt
 from lifemate.step_log import StepLog
+from lifemate.planner_caller import PlannerCaller
 
 
 def main():
@@ -90,6 +93,7 @@ def main():
                             runtime=getattr(backend,'runtime_info',{}))
             env = None
             row = None
+            controller = None
             try:
                 env = split.session(item['id'])
                 if detail:
@@ -117,8 +121,9 @@ def main():
                 content = annotate_spoken_phones(text)
                 messages.append({'role': 'user', 'content': content})
                 tools = split.tools(item)
+                controller = PlannerCaller(backend, tools, split.catalog)
                 row, log = run_agent(
-                    env, backend.decide, messages, tools, deadline,
+                    env, controller.decide, messages, tools, deadline,
                     emit=detail.emit if detail else None,
                     max_turns=args.max_turns)
             except Exception as error:
@@ -144,7 +149,8 @@ def main():
                 missing_predictions += 1
                 log['missing_submission_row'] = True
             log.update(id=item['id'], elapsed_seconds=time.monotonic()-start,budget_seconds=args.budget_seconds,
-                       policy='single', max_turns=args.max_turns)
+                       policy='planner_caller_apps', controller='planner_caller_apps',
+                       planning=controller.steps if controller else [], max_turns=args.max_turns)
             if detail:
                 detail.emit('sample.output', output=row, termination=log['termination'],
                             error_type=log.get('error_type'), budget_seconds=args.budget_seconds)

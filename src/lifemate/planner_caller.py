@@ -1,4 +1,4 @@
-"""Experimental observation-driven planner, retrieval and native caller."""
+"""Observation-driven app Planner and native Caller sharing one model."""
 import copy
 import json
 import time
@@ -37,7 +37,7 @@ def parse_step(text, apps=None):
 
 class PlannerCaller:
     """Same base model, two role prompts; generated guidance is never evidence."""
-    def __init__(self,backend,tools,catalog,top_k=8,routing='bm25'):
+    def __init__(self,backend,tools,catalog,top_k=8,routing='apps'):
         if routing not in ('bm25','apps'):raise ValueError('Unknown planner routing')
         self.routing=routing
         self.backend=backend

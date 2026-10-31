@@ -26,7 +26,7 @@ class PlannerCallerTests(unittest.TestCase):
     def test_observation_drives_replanning_and_done_skips_caller(self):
         backend=Backend([json.dumps({'next':'call','goal':'read','query':'đọc thông tin'}),
                          json.dumps({'next':'done','goal':'enough','query':''})])
-        controller=PlannerCaller(backend,TOOLS,CATALOG)
+        controller=PlannerCaller(backend,TOOLS,CATALOG,routing='bm25')
         class Env:
             def __init__(self):self.calls=[]
             def validate(self,*args):return {'ok':True}
@@ -44,7 +44,7 @@ class PlannerCallerTests(unittest.TestCase):
         self.assertNotIn('planner_guidance',str(messages))
 
     def test_malformed_plan_falls_back_without_extra_planning(self):
-        backend=Backend(['not JSON']);controller=PlannerCaller(backend,TOOLS,CATALOG)
+        backend=Backend(['not JSON']);controller=PlannerCaller(backend,TOOLS,CATALOG,routing='bm25')
         controller.decide([{'role':'user','content':'đọc thông tin'}],TOOLS,10)
         self.assertTrue(controller.steps[0]['planner_error'])
         self.assertEqual(len(backend.planner_inputs),1);self.assertEqual(len(backend.caller_inputs),1)

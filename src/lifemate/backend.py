@@ -33,7 +33,7 @@ class LocalBackend:
             torch.use_deterministic_algorithms(True)
         torch.backends.cudnn.benchmark = False
         torch.backends.cuda.matmul.allow_tf32 = False
-        self.max_new_tokens = int(os.environ.get('LIFEMATE_MAX_NEW_TOKENS', '1024'))
+        self.max_new_tokens = int(os.environ.get('LIFEMATE_MAX_NEW_TOKENS', '384'))
         if not 1 <= self.max_new_tokens <= 16384:
             raise ValueError('LIFEMATE_MAX_NEW_TOKENS must be between 1 and 16384')
         self.torch, self.device = torch, device
@@ -90,7 +90,7 @@ class LocalBackend:
         self.runtime_info['strict_tool_output'] = True
         self.runtime_info['cross_turn_cache'] = self.reuse_prompt_cache
         self.runtime_info['adapter_path'] = adapter_path
-        self.runtime_info['policy'] = 'single'
+        self.runtime_info['policy'] = 'planner_caller_apps'
         self.runtime_info['prompt_sha256'] = hashlib.sha256(
             INSTRUCTION.encode('utf-8')).hexdigest()
         if str(device).startswith('cuda'):

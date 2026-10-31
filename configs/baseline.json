@@ -1,15 +1,14 @@
 {
   "llm": {
-    "id": "Qwen/Qwen3.5-4B",
-    "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+    "id": "beyoru/Qwen3-4B-I-1209",
+    "revision": "2ee10771b4488c9979642afb0c27f2a114f95cb2",
     "license": "Apache-2.0",
-    "commit_date": "2026-03-02",
     "max_context_tokens": 16384,
-    "max_new_tokens": 1024,
+    "max_new_tokens": 384,
     "enable_thinking": false,
-    "architecture": "qwen3_5",
-    "checkpoint_parameters": 4659865088,
-    "local_dir": "models/qwen3.5-4b"
+    "architecture": "qwen3",
+    "checkpoint_parameters": 4022468096,
+    "local_dir": "models/beyoru-qwen3-4b"
   },
   "asr": {
     "id": "g-group-ai-lab/gipformer1.5-68M-rnnt",
@@ -30,6 +29,6 @@
   },
   "seed": 42,
   "sample_budget_seconds": 27,
-  "status": "Qwen3.5-4B untrained trial; GPU compatibility, accuracy and latency pending",
-  "controller": "single"
+  "status": "App Planner/Caller pilot: validation and A30 compliance pending",
+  "controller": "planner_caller_apps"
 }
