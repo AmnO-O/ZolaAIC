@@ -1,4 +1,4 @@
 -r requirements.txt
 # Training-only dependencies; freeze the resolved environment in training_report.json.
-peft>=0.17,<1
-bitsandbytes>=0.45,<1
+peft==0.20.0
+bitsandbytes==0.50.2
