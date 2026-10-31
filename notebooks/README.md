@@ -6,6 +6,7 @@ Upload `kaggle_pipeline.ipynb` to Kaggle for the next train test. Attach the aut
 
 # Kaggle workflows
 
+- `kaggle_caller_sft.ipynb`: top-8 Caller SFT, one epoch on 3,938 retained targets, 4,096-token cap, batch 1 / accumulation 8, LR 5e-5. Saves optimizer/RNG checkpoints and stops safely after an 8-hour session for continuation. A GPU resume test advanced step 2 to 4 successfully; the long training job has started and is not yet a completed epoch. Read `docs/caller_sft_run.md` and `docs/caller_sft_flow.md`.
 - `kaggle_compact_caller_sft.ipynb`: successful one-step Qwen3.5 QLoRA feasibility check on T4 with compact schemas. Defaults to top 10 seeds: the 8-train/2-validation smoke fit at 7.00 GiB peak PyTorch allocation and changed 32 adapter tensors (top 8: 6.41 GiB). Batch 1, accumulation 8. This is not an accuracy result or full training run. Read `docs/compact_caller_sft.md` for train-only schema repair, missing tools and overlength-target limitations.
 - `kaggle_sft_rl.ipynb`: private feasibility pilot, one SFT step then two interactive RL episodes. Live query printing off. Uses `main` until you pin the printed commit. **Current real-data configuration failed backward with OOM on one T4; no SFT/RL update completed.** Read `docs/sft_rl_pilot_report.md` before running. Reward is diagnostic, not verified task success, and a zero-signal group does not update the model.
 - `kaggle_train.ipynb`: private train preparation and QLoRA. Default: one-step GPU smoke test, 8 train/2 validation examples. Full epoch requires MAX_STEPS=-1 after the smoke test works.
