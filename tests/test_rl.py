@@ -89,6 +89,23 @@ class RLTests(unittest.TestCase):
         # A gradient descent update increases likelihood for positive advantage.
         self.assertTrue(torch.allclose(value.grad, torch.tensor([-.25,-.25])))
 
+    def test_vocabulary_precision_changes_only_frozen_matrices(self):
+        import torch
+        from lifemate.training import frozen_io_precision
+        class Model:
+            def __init__(self):
+                self.embedding=torch.nn.Embedding(8,4)
+                self.head=torch.nn.Linear(4,8)
+            def get_input_embeddings(self): return self.embedding
+            def get_output_embeddings(self): return self.head
+        model=Model()
+        with self.assertRaises(ValueError): frozen_io_precision(model,torch.float16)
+        model.embedding.requires_grad_(False)
+        model.head.requires_grad_(False)
+        frozen_io_precision(model,torch.float16)
+        self.assertEqual(model.embedding.weight.dtype,torch.float16)
+        self.assertEqual(model.head.weight.dtype,torch.float16)
+
     def test_hybrid_scoring_matches_sampled_tokens_and_backpropagates(self):
         import torch
         from transformers import (Qwen3_5TextConfig, Qwen3_5VisionConfig,

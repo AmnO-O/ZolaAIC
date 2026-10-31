@@ -14,6 +14,8 @@ Assistant-only labels mask context, schemas, user text and observed results. The
 
 The script uses local pinned Qwen weights with NF4 4-bit QLoRA, FP16 compute for T4, rank 16 attention adapters, gradient checkpointing, batch size 1 and accumulation 8. Seeds and deterministic algorithms are set. The notebook starts with one optimizer step on at most 8 train and 2 validation examples to test GPU compatibility, not produce a competitive model. A full run is one initial epoch; this is an experiment, not a recommended optimal hyperparameter set. OOM/unsupported kernels must be reported rather than silently switching precision or devices.
 
+Training uses assistant-position vocabulary logits only. Frozen input/output vocabulary matrices are explicitly kept in FP16 after PEFT preparation; norms and trainable adapters keep their training dtype. The notebook enables expandable CUDA allocation segments. This addresses the observed T4 backward OOM with fully upcast vocabulary matrices; GPU verification of the revised memory configuration is required.
+
 Adapters save policy metadata. Inference loads base and adapter locally, verifies policy hash and merges before execution. No teacher/second model is used at inference. Base and merged parameter counts are checked. Training dependencies and resolved versions are recorded; full reproducibility requires freezing that environment and testing reruns.
 
 QLoRA implementation follows the official PEFT quantization workflow: https://huggingface.co/docs/peft/developer_guides/quantization . These references describe APIs, not evidence of performance on this task.

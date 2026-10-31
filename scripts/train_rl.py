@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from lifemate.input_adapter import SplitInput
 from lifemate.prompts import INSTRUCTION
 from lifemate.rl import train_task, rollout, score_episode, group_advantages, policy_loss
+from lifemate.training import frozen_io_precision
 
 
 def load_tasks(directory, prepared, limit):
@@ -108,6 +109,8 @@ def main():
                     attn_implementation='sdpa')
         model = prepare_model_for_kbit_training(model,
                     gradient_checkpointing_kwargs={'use_reentrant': False})
+        frozen_io_precision(model, torch.float16)
+        report['frozen_vocabulary_dtype'] = 'float16'
         model = PeftModel.from_pretrained(model, args.sft_adapter, is_trainable=True,
                                           local_files_only=True)
         for module in model.modules():

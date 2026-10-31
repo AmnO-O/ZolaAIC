@@ -112,3 +112,16 @@ def assistant_loss(model, inputs):
                    use_cache=False, logits_to_keep=positions)
     loss = torch.nn.functional.cross_entropy(output.logits[0].float(), labels[positions+1])
     return loss, output
+
+
+def frozen_io_precision(model, dtype):
+    """PEFT upcasts frozen vocab matrices; keep only those in compute dtype.
+
+    Layer norms and trainable adapters retain their own stable training dtype.
+    For a large vocabulary this saves gigabytes without quantizing the head.
+    """
+    for module in (model.get_input_embeddings(), model.get_output_embeddings()):
+        if module is not None:
+            if any(p.requires_grad for p in module.parameters()):
+                raise ValueError('Vocabulary matrices must be frozen before precision change')
+            module.to(dtype=dtype)

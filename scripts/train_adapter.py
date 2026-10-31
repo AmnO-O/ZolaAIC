@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from lifemate.training import encode_example, pad_batch, assistant_loss
+from lifemate.training import encode_example, pad_batch, assistant_loss, frozen_io_precision
 from lifemate.prompts import INSTRUCTION
 
 
@@ -75,6 +75,7 @@ def main():
                 attn_implementation='sdpa')
     model.config.use_cache = False
     model = prepare_model_for_kbit_training(model, gradient_checkpointing_kwargs={'use_reentrant': False})
+    frozen_io_precision(model, torch.float16)
     model = get_peft_model(model, LoraConfig(r=16, lora_alpha=32, lora_dropout=0,
                      target_modules=['q_proj','k_proj','v_proj','o_proj'], bias='none', task_type='CAUSAL_LM'))
     total_steps = args.max_steps if args.max_steps > 0 else math.ceil(len(datasets['train'])/8)*args.epochs
@@ -101,6 +102,7 @@ def main():
     report = {'arguments': vars(args), 'data_manifest': manifest, 'prompt_sha256': prompt_hash,
               'retained_examples': {k: len(v) for k,v in datasets.items()},
               'torch': torch.__version__, 'gpu': torch.cuda.get_device_name(0),
+              'frozen_vocabulary_dtype': 'float16',
               'packages': subprocess.check_output([sys.executable,'-m','pip','freeze'],text=True)}
     (output/'training_report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     trainer.train()
