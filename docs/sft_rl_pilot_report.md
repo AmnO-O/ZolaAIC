@@ -32,3 +32,12 @@ CPU tests verify reward failure cases, label separation, one-session behavior, g
 Test the same bounded SFT smoke on a GPU with more VRAM, or implement and validate a memory-offload strategy without removing task context. A larger GPU has not yet been tested and is not guaranteed to solve every issue. Before a long RL run, add a validated task/state reward and SFT-reference KL control; the current exact-call proxy can penalize valid alternate trajectories.
 
 Once SFT actually trains, compare frozen base versus SFT on the manifest validation IDs with identical settings. Only then compare a bounded RL checkpoint against SFT. Keep inference greedy/offline and measure the official 30-second budget separately from these development training experiments.
+
+## Qwen3 follow-up
+
+At the user's request, the same pinned trainer was tested with Qwen/Qwen3-4B-Instruct-2507 revision `cdbee75f17c01a7cc42f958dc650907174af0554`, source `3b7898e`, on one T4. NF4, rank 16 attention adapters, batch 1, accumulation 8, FP16 frozen vocabulary and expandable allocation were retained; RL was disabled.
+
+- 8,192-token cap: retained all 8 smoke train targets / 2 validation targets. Backward/checkpoint recomputation failed in SDPA, requesting 990 MiB with 881 MiB free. No optimizer step completed.
+- 7,168-token cap: excluded train_0001 steps 4 and 5, without truncating their prompts. The remaining smoke run failed in SDPA, requesting 1.25 GiB with 863 MiB free. No optimizer step completed. Different retained examples mean peak allocation sizes are not a controlled per-example comparison.
+
+Private job: https://www.kaggle.com/code/amnpham/lifemate-qwen3-sft-feasibility . Both attempts ended in error; no RL job was started. Switching to Qwen3 alone did not resolve the tested memory constraint.
