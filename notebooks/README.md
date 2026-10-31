@@ -9,7 +9,7 @@
   48fd058. This is a separate training workflow; its adapter cannot load into
   beyoru. Planner distillation has not been implemented or run.
 
-Inference notebooks pin source commit 6a966e6 and record the resolved checkout.
+Inference notebooks pin source commit 5977801 and record the resolved checkout.
 Update REVISION deliberately for repeatability. Keep notebook outputs and datasets private. Internet is
 needed for setup only; inference uses local models. Attach amnpham/zalochallenge.
 No notebook reads environment files directly. No automatic leaderboard submission.
