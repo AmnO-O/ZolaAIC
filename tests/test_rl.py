@@ -120,6 +120,10 @@ class RLTests(unittest.TestCase):
         self.assertTrue(torch.allclose(actual, expected, atol=1e-6))
         policy_loss(actual,1,2,2).backward()
         self.assertTrue(any(p.grad is not None and p.grad.abs().sum()>0 for p in model.parameters()))
+        from lifemate.training import assistant_loss
+        sparse, _ = assistant_loss(model, {'input_ids':ids,
+            'attention_mask':torch.ones_like(ids), 'labels':torch.tensor([[-100,-100,-100,5,1]])})
+        self.assertTrue(torch.allclose(sparse, -expected.mean(), atol=1e-6))
 
 
 if __name__ == '__main__': unittest.main()

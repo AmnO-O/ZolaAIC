@@ -3,13 +3,14 @@ import argparse
 from functools import partial
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from lifemate.training import encode_example, pad_batch
+from lifemate.training import encode_example, pad_batch, assistant_loss
 from lifemate.prompts import INSTRUCTION
 
 
@@ -76,18 +77,27 @@ def main():
     model = prepare_model_for_kbit_training(model, gradient_checkpointing_kwargs={'use_reentrant': False})
     model = get_peft_model(model, LoraConfig(r=16, lora_alpha=32, lora_dropout=0,
                      target_modules=['q_proj','k_proj','v_proj','o_proj'], bias='none', task_type='CAUSAL_LM'))
+    total_steps = args.max_steps if args.max_steps > 0 else math.ceil(len(datasets['train'])/8)*args.epochs
+    warmup_steps = 0 if args.smoke else math.ceil(total_steps*0.05)
     training = TrainingArguments(output_dir=str(output/'checkpoints'), num_train_epochs=args.epochs,
                max_steps=args.max_steps, per_device_train_batch_size=1, per_device_eval_batch_size=1,
-               gradient_accumulation_steps=8, learning_rate=1e-4, warmup_ratio=0.05,
+               gradient_accumulation_steps=8, learning_rate=1e-4, warmup_steps=warmup_steps,
                fp16=True, bf16=False, gradient_checkpointing=True,
                gradient_checkpointing_kwargs={'use_reentrant': False}, optim='adamw_torch',
                logging_steps=1, eval_strategy='epoch', save_strategy='epoch',
                save_total_limit=1, report_to='none', seed=42, data_seed=42,
                full_determinism=True, remove_unused_columns=False,
                prediction_loss_only=True, dataloader_num_workers=0)
-    trainer = Trainer(model=model, args=training, train_dataset=datasets['train'],
+    class AssistantTrainer(Trainer):
+        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+            loss, outputs = assistant_loss(model, inputs)
+            return (loss, outputs) if return_outputs else loss
+
+    trainer = AssistantTrainer(model=model, args=training, train_dataset=datasets['train'],
                       eval_dataset=datasets['validation'], processing_class=tokenizer,
                       data_collator=partial(pad_batch, pad_token_id=tokenizer.pad_token_id))
+    # The custom loss is a mean per sequence; let Trainer scale accumulation.
+    trainer.model_accepts_loss_kwargs = False
     report = {'arguments': vars(args), 'data_manifest': manifest, 'prompt_sha256': prompt_hash,
               'retained_examples': {k: len(v) for k,v in datasets.items()},
               'torch': torch.__version__, 'gpu': torch.cuda.get_device_name(0),

@@ -96,3 +96,19 @@ def pad_batch(features, pad_token_id):
         output[key] = torch.tensor([f[key] + [pad] * (length-len(f[key]))
                                     for f in features], dtype=torch.long)
     return output
+
+
+def assistant_loss(model, inputs):
+    """Batch-one causal CE without allocating vocabulary logits for the prefix."""
+    import torch
+    if inputs['input_ids'].shape[0] != 1:
+        raise ValueError('Sparse assistant loss requires batch size one')
+    labels = inputs['labels'][0]
+    # Logit at position p predicts label p+1, including the assistant EOS.
+    positions = torch.nonzero(labels[1:] != -100, as_tuple=True)[0]
+    if not len(positions):
+        raise ValueError('No supervised assistant tokens')
+    output = model(**{k:v for k,v in inputs.items() if k != 'labels'},
+                   use_cache=False, logits_to_keep=positions)
+    loss = torch.nn.functional.cross_entropy(output.logits[0].float(), labels[positions+1])
+    return loss, output
