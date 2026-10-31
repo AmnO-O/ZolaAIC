@@ -6,7 +6,7 @@ The execution loop remains run_agent; Planner never executes tools itself.
 
 Planner sees app IDs/descriptions derived from the sample-permitted catalog,
 context, original request and all observed conversation turns. Its strict JSON
-contract is `next`, `goal`, `apps`. Names must be permitted app namespaces, not
+contract is `next`, `goal`, `apps`, `kind`. Names must be permitted app namespaces, not
 function names. A call requires at least one app; done requires apps=[].
 
 Selection uses exact namespace matching against the permitted schema list. All
@@ -33,3 +33,9 @@ The default model config is configs/baseline.json (beyoru + Gipformer). Historic
 Qwen3.5 assets are described in configs/qwen35_training.json. Historical SFT remains
 pinned to its original source and does not train this Planner. Experiment runners
 live under experiments/ and never feed gold to either inference role.
+
+Planner kind is read/write/mixed/meta for calls, none for done (apps=[]). It is
+passed to Caller as unverified guidance and does not filter schemas or authorize
+writes. Planner generation ceiling is 384 tokens, configurable via
+LIFEMATE_PLANNER_MAX_NEW_TOKENS (notebooks: PLANNER_MAX_NEW_TOKENS). The existing
+20-second per-plan and overall sample deadlines still apply.

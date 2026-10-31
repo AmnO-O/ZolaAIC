@@ -16,3 +16,9 @@ No notebook reads environment files directly. No automatic leaderboard submissio
 
 Archived comparison runners are in ../experiments. Removed RL/obsolete smoke
 notebooks are recoverable from Git history. Checkpoints and local artifacts remain.
+
+Planner kind is read/write/mixed/meta for calls, none for done (apps=[]). It is
+passed to Caller as unverified guidance and does not filter schemas or authorize
+writes. Planner generation ceiling is 384 tokens, configurable via
+LIFEMATE_PLANNER_MAX_NEW_TOKENS (notebooks: PLANNER_MAX_NEW_TOKENS). The existing
+20-second per-plan and overall sample deadlines still apply.

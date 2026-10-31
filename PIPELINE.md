@@ -4,7 +4,7 @@
 2. For each sample create exactly one ToolEnv and start the sample deadline.
 3. Transcribe current/history audio and retain original context and history.
 4. Planner receives permitted app descriptions and the observed conversation;
-   it emits `next`, `goal`, `apps`. A valid stop uses `next=done`, `apps=[]`.
+   it emits `next`, `goal`, `apps`, `kind`. A valid stop uses `next=done`, `apps=[]`.
 5. For a valid app plan, select every permitted function schema in those apps.
    Invalid plans fall back to original-query BM25; no invalid goal is forwarded.
 6. Caller receives the current goal as unverified guidance, selected schemas,
@@ -14,7 +14,7 @@
 8. Stop on no remaining work, clarification, uncertain write outcome, loop bound
    or deadline. Export all actual calls and the real final hash; retain diagnostics.
 
-Planner: at most 192 output tokens and 20 seconds per invocation, within the shared
+Planner: at most 384 output tokens and 20 seconds per invocation, within the shared
 sample budget. Caller notebook ceiling: 384 tokens. Both roles use greedy decoding.
 Eight controller rounds by default. Main runner budget 27 seconds; train notebook
 uses 90 seconds for development. Cooperative deadlines can overrun native operations.
@@ -22,3 +22,9 @@ uses 90 seconds for development. Cooperative deadlines can overrun native operat
 See README.md for source layout and notebooks. experiments/ contains comparison
 scripts and is not used by inference. Frozen Qwen3.5 Caller SFT is a separate
 historical training workflow, not a trained app Planner or a beyoru adapter.
+
+Planner kind is read/write/mixed/meta for calls, none for done (apps=[]). It is
+passed to Caller as unverified guidance and does not filter schemas or authorize
+writes. Planner generation ceiling is 384 tokens, configurable via
+LIFEMATE_PLANNER_MAX_NEW_TOKENS (notebooks: PLANNER_MAX_NEW_TOKENS). The existing
+20-second per-plan and overall sample deadlines still apply.

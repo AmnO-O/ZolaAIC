@@ -50,7 +50,7 @@ class Backend:
   assert 'REFERENCE_MUST_NOT_LEAK' not in str(messages)
   assert 'LABEL_MUST_NOT_LEAK' not in str(messages)
   self._generation_complete=True
-  return json.dumps({'next':'call','goal':'Create the requested memo','apps':['memo']})
+  return json.dumps({'next':'call','goal':'Create the requested memo','apps':['memo'],'kind':'write'})
  def reset_sample(self):
   import os
   with open(os.environ['RESET_LOG'],'a') as log:log.write('reset\\n')

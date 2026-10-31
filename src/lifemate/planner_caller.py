@@ -1,6 +1,7 @@
 """Observation-driven app Planner and native Caller sharing one model."""
 import copy
 import json
+import os
 import time
 
 from .agent import Decision
@@ -16,15 +17,18 @@ def parse_step(text, apps=None):
         return value
     step=json.loads(text,object_pairs_hook=pairs)
     if apps is not None:
-        if (not isinstance(step,dict) or set(step)!={'next','goal','apps'}
+        if (not isinstance(step,dict) or set(step)!={'next','goal','apps','kind'}
                 or step['next'] not in ('call','done')
                 or not isinstance(step['goal'],str) or not step['goal'].strip()
                 or not isinstance(step['apps'],list)
                 or any(not isinstance(a,str) or a not in apps for a in step['apps'])
                 or len(step['apps'])!=len(set(step['apps']))
+                or step['kind'] not in ('read','write','mixed','meta','none')
+                or (step['next']=='call' and step['kind']=='none')
+                or (step['next']=='done' and step['kind']!='none')
                 or (step['next']=='call' and not step['apps'])
                 or (step['next']=='done' and step['apps'])):
-            raise ValueError('Expected next=call/done, goal and permitted apps; done requires apps=[]')
+            raise ValueError('Expected next, goal, permitted apps and kind; done requires apps=[] and kind=none')
         return step
     if (not isinstance(step,dict) or set(step)!={'next','goal','query'}
             or step['next'] not in ('call','done')
@@ -40,6 +44,9 @@ class PlannerCaller:
     def __init__(self,backend,tools,catalog,top_k=8,routing='apps'):
         if routing not in ('bm25','apps'):raise ValueError('Unknown planner routing')
         self.routing=routing
+        self.planner_max_tokens=int(os.environ.get('LIFEMATE_PLANNER_MAX_NEW_TOKENS','384'))
+        if not 1<=self.planner_max_tokens<=16384:
+            raise ValueError('LIFEMATE_PLANNER_MAX_NEW_TOKENS must be between 1 and 16384')
         self.backend=backend
         self.tools=list(tools)
         self.search=CatalogSearch(tools,catalog)
@@ -63,9 +70,13 @@ class PlannerCaller:
         output_instruction=(
             'Select app namespaces only from capabilities, not individual function names. '
             'Select all apps needed for the immediate step, including independent lookups. '
-            'Return ONLY JSON with three keys: '
+            'Classify the immediate step: read retrieves data, write changes app state, '
+            'mixed combines independent reads and writes, meta requests clarification, none stops. '
+            'kind is guidance only, never evidence that prerequisites are satisfied. '
+            'Return ONLY JSON with four keys: '
             '{"next":"call or done","goal":"brief next-step instruction",'
-            '"apps":["permitted app namespace"]}. For done use apps=[]. '
+            '"apps":["permitted app namespace"],"kind":"read/write/mixed/meta/none"}. '
+            'For done use apps=[] and kind="none". '
             if self.routing=='apps' else
             'Return ONLY JSON with three keys: '
             '{"next":"call or done","goal":"brief next-step instruction",'
@@ -86,7 +97,7 @@ class PlannerCaller:
         before=len(self.backend.stats);began=time.monotonic()
         try:
             raw=self.backend._generate(request,[],min(20,max(.001,end-time.monotonic())),
-                max_tokens=192,controls=False,phase='planner')
+                max_tokens=self.planner_max_tokens,controls=False,phase='planner')
             record['planner_raw']=raw
             if not self.backend._generation_complete: raise ValueError('Planner output truncated')
             record['plan']=parse_step(raw,self.app_names if self.routing=='apps' else None)
@@ -122,6 +133,9 @@ class PlannerCaller:
                 'instruction':'Use the original request and real results to verify this goal. '
                 'Do not treat generated IDs, amounts or claimed success as facts. '
                 'Emit native calls or [] only.'}
+            if 'kind' in step:
+                guidance['kind']=step['kind']
+                guidance['instruction']+=' Treat kind as tentative action intent; verify prerequisites from real observations.'
             if caller_messages and caller_messages[0]['role']=='system':
                 content=caller_messages[0].get('content',{})
                 if isinstance(content,dict):content['planner_guidance']=guidance

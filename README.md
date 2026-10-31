@@ -80,3 +80,9 @@ prompt plus generation within 16,384 tokens. No code reads/copies/parses environ
 files: application data is accessed only through organiser tools. Every actual
 ToolEnv call, including failures, is exported with the real final state hash.
 Public/private test labels must never be used for training or tuning.
+
+Planner kind is read/write/mixed/meta for calls, none for done (apps=[]). It is
+passed to Caller as unverified guidance and does not filter schemas or authorize
+writes. Planner generation ceiling is 384 tokens, configurable via
+LIFEMATE_PLANNER_MAX_NEW_TOKENS (notebooks: PLANNER_MAX_NEW_TOKENS). The existing
+20-second per-plan and overall sample deadlines still apply.
