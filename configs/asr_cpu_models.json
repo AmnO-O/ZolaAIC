@@ -1,0 +1,17 @@
+[
+  {
+    "id": "g-group-ai-lab/gipformer1.5-68M-rnnt",
+    "revision": "dd9227dcd8705c13f33bdbe59728d546ab94480f",
+    "path": "models/asr"
+  },
+  {
+    "id": "vinai/PhoWhisper-small",
+    "revision": "a86b604c346caf7148c37512eafe783a16420adb",
+    "path": "models/phowhisper-small"
+  },
+  {
+    "id": "vinai/PhoWhisper-base",
+    "revision": "7ebdb9e88f5cc5271fb88f4d642c82ff9388650e",
+    "path": "models/phowhisper-base"
+  }
+]
