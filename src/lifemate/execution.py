@@ -25,14 +25,11 @@ def outcome(result):
 
 class ExecutionLedger:
     def __init__(self):
-        self.completed_writes = set()
+        self.completed_writes = {}
         self.failed_targets = set()
         self.records = []
         self.seen_batches = set()
         self.stagnant_rounds = 0
-
-    def duplicate_write(self, call, kind):
-        return kind not in ('read', 'meta') and fingerprint(call) in self.completed_writes
 
     def observe(self, call, result, kind):
         status = outcome(result)
@@ -40,7 +37,8 @@ class ExecutionLedger:
         if status == 'succeeded':
             self.failed_targets.discard(target(call))
             if kind not in ('read', 'meta'):
-                self.completed_writes.add(fingerprint(call))
+                key=fingerprint(call)
+                self.completed_writes[key]=self.completed_writes.get(key,0)+1
         else:
             self.failed_targets.add(target(call))
         return status

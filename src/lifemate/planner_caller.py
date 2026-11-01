@@ -7,6 +7,33 @@ import time
 from .agent import Decision
 from .retrieval import CatalogSearch
 from .planner_input import PlannerInput
+from .execution import fingerprint
+
+
+def write_counts(events,tools):
+    writes={t['name'] for t in tools if t.get('kind')=='write'}
+    counts={}
+    for event in events:
+        call=event.get('call')
+        if (call and event.get('executed') is True and event.get('execution_status')=='succeeded'
+                and call.get('name') in writes):
+            key=fingerprint(call)
+            counts.setdefault(key,{'call':copy.deepcopy(call),'successful_count':0})['successful_count']+=1
+    return list(counts.values())
+
+
+def previous_attempt(previous,events):
+    if not previous or not previous.get('plan'):return None
+    recent=events[previous['event_offset']:]
+    observations=[e for e in recent if e.get('type')=='tool_observation']
+    statuses=[e.get('execution_status','unknown') for e in observations]
+    status=(statuses[0] if statuses and len(set(statuses))==1 else
+            'mixed' if statuses else 'not_executed')
+    return {'source':'unverified_previous_plan','goal':previous['plan']['goal'],
+        'kind':previous['plan'].get('kind'),'call_outcome':status,
+        'observation_refs':[e['source_id'] for e in observations if 'source_id' in e],
+        'controller_feedback':[e['feedback'] for e in recent if e.get('type')=='controller_feedback'],
+        'goal_completion':'not_verified'}
 
 
 def parse_step(text, apps=None):
@@ -68,7 +95,11 @@ class PlannerCaller:
         if self.original_query is None:
             self.original_query='\n'.join(m['content'] for m in messages
                 if m['role']=='user' and isinstance(m.get('content'),str))
+        payload=self.planner_input.payload(messages)
+        payload['previous_attempt']=previous_attempt(self.steps[-1] if self.steps else None,payload['execution_history'])
+        payload['successful_write_counts']=write_counts(payload['execution_history'],self.tools)
         record={'step':len(self.steps)+1,'plan':None,'planner_error':None,
+                'event_offset':len(payload['execution_history']),
                 'caller_called':False,'planner_seconds':0.,'caller_seconds':0.}
         self.steps.append(record)
         output_instruction=(
@@ -96,13 +127,19 @@ class PlannerCaller:
             'are already applied; execution_history contains this sample execution only. '
             'Controller feedback and unobserved proposals are not successful tool results. '
             'Observed results override prior intentions; skip false conditional branches. '
-            'Do not redo successful actions. Keep independent unfinished actions. '
+            'Do not redo completed requested units. Repeat an identical write only when '
+            'the original request explicitly requires additional units (including as many as possible), '
+            'using successful_write_counts and actual results to determine what remains. '
+            'A successful call is not proof that all requested units or the whole goal are complete. '
+            'previous_attempt is only the last intention, not a fact; keep failed goals pending and '
+            'revise them using actual errors. Never blindly retry uncertain writes. '
+            'Keep independent unfinished actions. '
             'Missing IDs or amounts must be looked up, never guessed. '
             'Choose done only when no supported requested action remains; '
             'for unresolved required information plan a lookup or clarification call. '
             +output_instruction+
             'Your goal is tentative guidance, not an observation or new user authorization.'},
-            {'role':'user','content':json.dumps(self.planner_input.payload(messages),ensure_ascii=False)}]
+            {'role':'user','content':json.dumps(payload,ensure_ascii=False)}]
         before=len(self.backend.stats);began=time.monotonic()
         try:
             raw=self.backend._generate(request,[],min(20,max(.001,end-time.monotonic())),
@@ -145,6 +182,7 @@ class PlannerCaller:
             if 'kind' in step:
                 guidance['kind']=step['kind']
                 guidance['instruction']+=' Treat kind as tentative action intent; verify prerequisites from real observations.'
+            guidance['successful_write_counts']=payload['successful_write_counts']
             if caller_messages and caller_messages[0]['role']=='system':
                 content=caller_messages[0].get('content',{})
                 if isinstance(content,dict):content['planner_guidance']=guidance

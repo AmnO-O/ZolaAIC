@@ -29,7 +29,7 @@ Inference uses exactly one ToolEnv per sample. All real calls and final hash com
 from that environment. Read/write success, failed/uncertain outcomes and model
 stops are distinct. `finished` is not semantic completion verification.
 
-The default model config is configs/baseline.json (beyoru + Gipformer). Historical
+The default model config is configs/baseline.json (Qwen3.5 + Gipformer). Historical
 Qwen3.5 assets are described in configs/qwen35_training.json. Historical SFT remains
 pinned to its original source and does not train this Planner. Experiment runners
 live under experiments/ and never feed gold to either inference role.
@@ -54,8 +54,9 @@ from environment files and no execution behaviour or Caller input is rewritten.
 
 Goal covers the immediate action, retaining any directly relevant guard. It must
 not list speculative later tasks. Independent lookups within the step remain
-possible. Previous generated goals are not appended: a rolling last-plan memory
-would be a separate experiment, not a verified observation or proof of CoT.
+possible. Only the immediately preceding valid plan is included in previous_attempt. It is
+unverified intention with observed call_outcome, observation_refs and controller
+feedback. Call success never automatically marks the goal complete.
 
 Structural replay checked 319 saved Planner inputs across 100 samples. Mean JSON
 user-payload length fell from 3875.85 to 3319.74 characters; these are not token
@@ -63,3 +64,22 @@ counts, runtime or accuracy results. GPU evaluation of the new format is pending
 Native chat templates remain unchanged; the official Qwen model card demonstrates
 apply_chat_template: https://huggingface.co/Qwen/Qwen3.5-4B . This input organization
 is our engineering hypothesis, not a prescribed or proven optimal Qwen format.
+
+## Recent attempt and requested repeated units
+
+previous_attempt refers only to observations appended after that attempt began.
+Failed/rejected/protocol-error attempts remain visible, not silently discarded.
+No whole-goal completion flag is inferred from an ok=true result.
+successful_write_counts counts identical calls only when the harness recorded
+executed=true and execution_status=succeeded. Original history is already applied
+and is not counted as execution of the latest request. The counts are passed to
+Planner and Caller, but user quantity interpretation remains a model decision.
+
+The blanket identical-write rejection was removed because repeated consumption
+can be requested. There is no hardcoded loyalty exception or deterministic
+quantity authorization. This increases exposure to accidental repeated writes;
+model instructions, actual history, no-progress guard and existing turn/deadline
+bounds are the controls. Uncertain writes still stop execution as before.
+
+The Caller policy hash changed. Do not attach adapters trained under the former
+policy without retraining/evaluation; the backend rejects policy mismatches.

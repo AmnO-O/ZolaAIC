@@ -1,6 +1,6 @@
 # LifeMate — App Planner / Caller
 
-The main pipeline uses one shared `beyoru/Qwen3-4B-I-1209` model for two roles.
+The main pipeline uses one shared `Qwen/Qwen3.5-4B` model for two roles.
 Planner receives catalog app descriptions, the original request, context and observed
 history. It chooses the next goal and app namespaces. Python loads every permitted
 function schema in those apps; Caller chooses functions and fills arguments.
@@ -31,7 +31,7 @@ Both roles share one loaded model; there is no second 4B checkpoint at inference
   samples, 27-second internal budget and complete submission-format validation.
 - [Frozen Caller SFT](notebooks/kaggle_caller_sft.ipynb): historical Qwen3.5 training,
   pinned to its original revision. It is not Planner training, and its adapter is
-  incompatible with the beyoru inference backbone. No Planner distillation has run.
+  trained under its original policy, not this updated Planner/Caller policy. No Planner distillation has run.
 
 The inference notebooks pin the app Planner/Caller source commit and record
 the actual checkout. Update REVISION deliberately for repeatable comparisons. Attach private `amnpham/zalochallenge`.
@@ -42,7 +42,7 @@ Downloads/installations occur during setup; inference must use local assets only
 ```sh
 python -m pip install -r requirements.txt
 python scripts/download_models.py
-# Set LIFEMATE_LLM_PATH=models/beyoru-qwen3-4b and LIFEMATE_ASR_PATH=models/asr.
+# Set LIFEMATE_LLM_PATH=models/qwen3.5-4b and LIFEMATE_ASR_PATH=models/asr.
 # Set HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1, PYTHONHASHSEED=42.
 python scripts/infer.py --split-dir /data --backend lifemate.backend:create_backend --output result/submission.jsonl
 python -m unittest discover -s tests -q
@@ -68,12 +68,17 @@ routing, rejected decisions and termination. Output files are never overwritten.
 
 ## Measured limits
 
-On ten familiar train samples with reference transcripts and one T4, app routing
-reached diagnostic Macro F1 0.4819, mean 22.25 seconds, and one sample at or above
-30 seconds. Planner+BM25 reached 0.3361 and 32.47 seconds in the paired run.
-These are pilot results, not official score, held-out accuracy or A30 compliance.
-`finished` does not establish task success; conditional branches and entity choice
-still fail. Three app-plan errors used BM25 fallback in that run.
+On the previous 100-random-train pilot with reference transcripts, Qwen3.5 reached
+diagnostic call F1 0.4804 and state-gated call F1 0.3294 (timeout ignored), mean
+34.29 seconds on T4. Those results precede the flattened input and last-attempt
+memory changes. Evaluation of the new version on 200 samples is pending. No ASR
+or official A30-compliant score is established. `finished` is not task success.
+
+The latest valid goal is retained as unverified previous_attempt with actual
+observation references, including failures. Successful repeated-write counts are
+shown to both roles. Identical writes are allowed because users may request
+multiple units. Quantity compliance is model-directed, not deterministically
+enforced; accidental duplicates remain a material failure mode.
 
 The loaded LLM must remain below 5B parameters, total models below 6B, and each
 prompt plus generation within 16,384 tokens. No code reads/copies/parses environment

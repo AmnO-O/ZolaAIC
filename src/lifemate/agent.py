@@ -187,8 +187,6 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None):
             name, args = call['name'], call['arguments']
             kind = specs.get(name, {}).get('kind')
             error = 'Tool is not permitted for this sample.' if name not in specs else None
-            if not error and ledger.duplicate_write(call, kind):
-                error = 'Identical write already succeeded; do not repeat it.'
             if not error:
                 error = evidence.check(specs[name], args, specs)
             check = {'ok': False, 'error': error} if error else env.validate(name, args)
@@ -244,4 +242,5 @@ def run_agent(env, decide, messages, tools, deadline, max_turns=8, emit=None):
         'termination': reason, 'task_success_verified': False, 'controller': 'single',
         'trace': trace, 'execution_ledger': ledger.records, 'decisions': decisions,
         'protocol_errors': protocol_errors, 'validation_rejections': validation_rejections,
-        'attempted_reads': attempted_reads, 'attempted_writes': attempted_writes}
+        'attempted_reads': attempted_reads, 'attempted_writes': attempted_writes,
+        'successful_write_counts':ledger.completed_writes}
