@@ -28,3 +28,27 @@ passed to Caller as unverified guidance and does not filter schemas or authorize
 writes. Planner generation ceiling is 384 tokens, configurable via
 LIFEMATE_PLANNER_MAX_NEW_TOKENS (notebooks: PLANNER_MAX_NEW_TOKENS). The existing
 20-second per-plan and overall sample deadlines still apply.
+
+## Planner input projection
+
+Planner receives five explicit fields: context, available_apps, prior_conversation,
+current_request and execution_history. App descriptions appear once in available_apps;
+installed_apps/app_descriptions are removed only from the Planner context copy.
+The current-request boundary is captured on the first decision and remains fixed
+when protocol feedback is appended as a user message. Earlier assistant actions
+remain in prior_conversation; current calls are paired with their observations,
+including executed/source_type/execution_status from the harness. Rejections and
+unobserved proposals are not labelled successful observations. No data is obtained
+from environment files and no execution behaviour or Caller input is rewritten.
+
+Goal covers the immediate action, retaining any directly relevant guard. It must
+not list speculative later tasks. Independent lookups within the step remain
+possible. Previous generated goals are not appended: a rolling last-plan memory
+would be a separate experiment, not a verified observation or proof of CoT.
+
+Structural replay checked 319 saved Planner inputs across 100 samples. Mean JSON
+user-payload length fell from 3875.85 to 3319.74 characters; these are not token
+counts, runtime or accuracy results. GPU evaluation of the new format is pending.
+Native chat templates remain unchanged; the official Qwen model card demonstrates
+apply_chat_template: https://huggingface.co/Qwen/Qwen3.5-4B . This input organization
+is our engineering hypothesis, not a prescribed or proven optimal Qwen format.

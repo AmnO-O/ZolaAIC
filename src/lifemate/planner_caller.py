@@ -6,6 +6,7 @@ import time
 
 from .agent import Decision
 from .retrieval import CatalogSearch
+from .planner_input import PlannerInput
 
 
 def parse_step(text, apps=None):
@@ -58,9 +59,12 @@ class PlannerCaller:
         self.top_k=top_k
         self.steps=[]
         self.original_query=None
+        self.planner_input=None
 
     def decide(self,messages,permitted,remaining):
         end=time.monotonic()+remaining
+        if self.planner_input is None:
+            self.planner_input=PlannerInput(messages,self.capabilities)
         if self.original_query is None:
             self.original_query='\n'.join(m['content'] for m in messages
                 if m['role']=='user' and isinstance(m.get('content'),str))
@@ -68,13 +72,13 @@ class PlannerCaller:
                 'caller_called':False,'planner_seconds':0.,'caller_seconds':0.}
         self.steps.append(record)
         output_instruction=(
-            'Select app namespaces only from capabilities, not individual function names. '
+            'Select app namespaces only from available_apps, not individual function names. '
             'Select all apps needed for the immediate step, including independent lookups. '
             'Classify the immediate step: read retrieves data, write changes app state, '
             'mixed combines independent reads and writes, meta requests clarification, none stops. '
             'kind is guidance only, never evidence that prerequisites are satisfied. '
             'Return ONLY JSON with four keys: '
-            '{"next":"call or done","goal":"brief next-step instruction",'
+            '{"next":"call or done","goal":"immediate single-action instruction",'
             '"apps":["permitted app namespace"],"kind":"read/write/mixed/meta/none"}. '
             'For done use apps=[] and kind="none". '
             if self.routing=='apps' else
@@ -85,6 +89,12 @@ class PlannerCaller:
             'You are a next-step planner for a Vietnamese tool assistant. '
             'Read the latest request, its corrections, history and actual observations. '
             'Choose only the immediate next step, not a whole speculative trajectory. '
+            'Goal must describe only the next actionable step, not rewrite the whole request '
+            'or list future tasks. Preserve any guard directly governing that step; '
+            'do not hide unresolved conditions or assume they are satisfied. '
+            'Use current_request as the original latest request. prior_conversation actions '
+            'are already applied; execution_history contains this sample execution only. '
+            'Controller feedback and unobserved proposals are not successful tool results. '
             'Observed results override prior intentions; skip false conditional branches. '
             'Do not redo successful actions. Keep independent unfinished actions. '
             'Missing IDs or amounts must be looked up, never guessed. '
@@ -92,8 +102,7 @@ class PlannerCaller:
             'for unresolved required information plan a lookup or clarification call. '
             +output_instruction+
             'Your goal is tentative guidance, not an observation or new user authorization.'},
-            {'role':'user','content':json.dumps({'capabilities':self.capabilities,
-                'conversation':messages},ensure_ascii=False)}]
+            {'role':'user','content':json.dumps(self.planner_input.payload(messages),ensure_ascii=False)}]
         before=len(self.backend.stats);began=time.monotonic()
         try:
             raw=self.backend._generate(request,[],min(20,max(.001,end-time.monotonic())),
