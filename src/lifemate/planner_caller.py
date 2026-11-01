@@ -98,6 +98,7 @@ class PlannerCaller:
         payload=self.planner_input.payload(messages)
         payload['previous_attempt']=previous_attempt(self.steps[-1] if self.steps else None,payload['execution_history'])
         payload['successful_write_counts']=write_counts(payload['execution_history'],self.tools)
+        payload=self.transform_planner_payload(payload)
         record={'step':len(self.steps)+1,'plan':None,'planner_error':None,
                 'event_offset':len(payload['execution_history']),
                 'caller_called':False,'planner_seconds':0.,'caller_seconds':0.}
@@ -171,6 +172,20 @@ class PlannerCaller:
             routing['mode']='bm25_fallback' if self.routing=='apps' else 'bm25'
         record['retrieval_seconds']=time.monotonic()-began
         record['routing']=routing
+        caller_messages=self.caller_messages(messages,step,payload)
+        remaining=end-time.monotonic()
+        if remaining<=0:raise TimeoutError('Sample deadline before caller')
+        before=len(self.backend.stats);began=time.monotonic()
+        record['caller_called']=True
+        try:
+            decision=self.backend.decide(caller_messages,visible,remaining)
+            record['decision']=decision.payload()
+            return decision
+        finally:
+            record['caller_seconds']=time.monotonic()-began
+            for stat in self.backend.stats[before:]:stat['phase']='caller'
+
+    def caller_messages(self,messages,step,payload):
         caller_messages=copy.deepcopy(messages)
         if step:
             # Do not insert generated guidance as a user instruction, tool result,
@@ -189,14 +204,7 @@ class PlannerCaller:
                 else:caller_messages[0]['content']=content+'\n'+json.dumps(guidance,ensure_ascii=False)
             else:
                 caller_messages.insert(0,{'role':'system','content':guidance})
-        remaining=end-time.monotonic()
-        if remaining<=0:raise TimeoutError('Sample deadline before caller')
-        before=len(self.backend.stats);began=time.monotonic()
-        record['caller_called']=True
-        try:
-            decision=self.backend.decide(caller_messages,visible,remaining)
-            record['decision']=decision.payload()
-            return decision
-        finally:
-            record['caller_seconds']=time.monotonic()-began
-            for stat in self.backend.stats[before:]:stat['phase']='caller'
+        return caller_messages
+
+    def transform_planner_payload(self,payload):
+        return payload

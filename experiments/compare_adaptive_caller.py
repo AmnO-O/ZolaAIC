@@ -16,6 +16,8 @@ from lifemate.evaluation import call_metrics
 from lifemate.input_adapter import SplitInput
 from lifemate.planner_caller import PlannerCaller
 from lifemate.retrieval import CatalogSearch
+from lifemate.step_log import StepLog
+from subtask_controller import SubtaskController
 
 
 def main():
@@ -24,7 +26,7 @@ def main():
         parser.add_argument('--' + flag, required=True)
     parser.add_argument('--seconds', type=float, default=90)
     parser.add_argument('--top-k', type=int, default=8)
-    parser.add_argument('--methods',nargs='+',choices=['bm25','adaptive_plan','app_plan'],
+    parser.add_argument('--methods',nargs='+',choices=['bm25','adaptive_plan','app_plan','receipt1','receipt2'],
                         default=['bm25','adaptive_plan'])
     args = parser.parse_args()
     if len(args.methods)!=len(set(args.methods)):raise ValueError('Duplicate methods')
@@ -59,7 +61,10 @@ def main():
             messages = prompt(row, split.catalog)
             original = '\n'.join(m['content'] for m in messages if m['role'] == 'user')
             order = list(args.methods)
-            if index % 2:
+            if len(order)>2:
+                shift=index%len(order)
+                order=order[shift:]+order[:shift]
+            elif index % 2:
                 order.reverse()
             hashes = []
             for method in order:
@@ -67,8 +72,16 @@ def main():
                 backend.stats = []
                 start = time.monotonic()
                 end = start + args.seconds
-                controller = PlannerCaller(backend, tools, split.catalog, args.top_k,
-                    routing='apps' if method=='app_plan' else 'bm25')
+                controller = (SubtaskController(backend,tools,split.catalog,args.top_k,
+                    caller_turns=2 if method=='receipt2' else 1) if method.startswith('receipt') else
+                    PlannerCaller(backend, tools, split.catalog, args.top_k,
+                    routing='apps' if method=='app_plan' else 'bm25'))
+                log_dir=out/method
+                log_dir.mkdir(exist_ok=True)
+                detail=StepLog(log_dir/(identifier+'.steps.jsonl'),verbose=False)
+                detail.begin(identifier,start)
+                backend.trace_event=detail.emit
+                detail.emit('sample.input',input={'messages':messages,'method':method},budget_seconds=args.seconds)
                 record = {'id': identifier, 'method': method}
                 if method == 'bm25':
                     visible, routing = CatalogSearch(tools, split.catalog).select([original], args.top_k)
@@ -85,12 +98,15 @@ def main():
                     env = split.session(identifier)
                     record['initial_hash'] = env.get_state_hash()
                     hashes.append(record['initial_hash'])
-                    prediction, trace = run_agent(env, decide, messages, tools, end, max_turns=8)
+                    prediction, trace = run_agent(env, decide, messages, tools, end, max_turns=8,emit=detail.emit)
                 except Exception as error:
                     record['error'] = type(error).__name__ + ': ' + str(error)
                     if env is not None:
                         prediction = {'tool_calls': env.get_tool_calls(), 'state_hash': env.get_state_hash()}
                 elapsed = time.monotonic() - start
+                detail.emit('sample.output',output=prediction,termination=trace['termination'],method=method)
+                detail.close()
+                backend.trace_event=None
                 # Gold is evaluator-only; neither role nor retrieval receives it.
                 gold_names={c['name'] for c in row['label']['tool_calls']}
                 shown_sets=([set(record['routing']['selected_names'])] if method=='bm25' else
@@ -131,7 +147,8 @@ def main():
             'samples_ge_30s': sum(r['elapsed_seconds'] >= 30 for r in selected),
             'termination_counts': dict(Counter(r['trace']['termination'] for r in selected)),
             'planner_errors': sum(bool(s['planner_error']) for r in selected for s in r['steps']),
-            'mean_planner_calls': statistics.mean(len(r['steps']) for r in selected),
+            'mean_planner_calls': statistics.mean(sum(not s.get('reused_subtask',False) for s in r['steps']) for r in selected),
+            'mean_caller_calls':statistics.mean(sum(s['caller_called'] for s in r['steps']) for r in selected),
             'mean_planner_seconds': statistics.mean(sum(s['planner_seconds'] for s in r['steps']) for r in selected),
             'sample_errors': sum('error' in r for r in selected)}
     (out / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
